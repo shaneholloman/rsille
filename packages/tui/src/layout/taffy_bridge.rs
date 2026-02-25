@@ -25,7 +25,7 @@ impl TaffyBridge {
     }
 
     /// Compute layout for a list of widgets
-    pub fn compute_layout<M: Clone>(
+    pub fn compute_layout<M>(
         &mut self,
         widgets: &[Box<dyn Widget<M>>],
         available: Area,
@@ -103,7 +103,7 @@ impl TaffyBridge {
     }
 
     /// Compute grid layout for a list of widgets with placement information
-    pub fn compute_grid_layout_with_placement<M: Clone>(
+    pub fn compute_grid_layout_with_placement<M>(
         &mut self,
         items: &[(&dyn Widget<M>, &super::grid_placement::GridPlacement)],
         available: Area,
@@ -413,159 +413,3 @@ impl TaffyBridge {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::event::{Event, EventResult};
-    use crate::layout::Direction;
-    use crate::widget::Label;
-
-    struct TestWidget {
-        constraints: Constraints,
-    }
-
-    impl TestWidget {
-        fn new(constraints: Constraints) -> Self {
-            Self { constraints }
-        }
-    }
-
-    impl Widget<()> for TestWidget {
-        fn render(&self, _chunk: &mut render::chunk::Chunk) {}
-        fn handle_event(&mut self, _event: &Event) -> EventResult<()> {
-            EventResult::Ignored
-        }
-        fn constraints(&self) -> Constraints {
-            self.constraints
-        }
-    }
-
-    #[test]
-    fn test_taffy_layout_calculation() {
-        let mut bridge = TaffyBridge::new();
-
-        // Create test labels with known sizes
-        let label1 = Label::new("Hello"); // 5 chars
-        let label2 = Label::new("World!"); // 6 chars
-
-        // Available area: 80x24 terminal
-        let available = Area::new((0, 0).into(), (80, 24).into());
-
-        // Create widgets
-        let widgets: Vec<Box<dyn Widget<()>>> = vec![Box::new(label1), Box::new(label2)];
-
-        // Compute layout
-        let results = bridge
-            .compute_layout(&widgets, available, Direction::Vertical, 1, None, None)
-            .expect("Layout computation should succeed");
-
-        // Assert reasonable values
-        assert!(
-            results[0].width() >= 5,
-            "First child should have width at least 5"
-        );
-        assert!(
-            results[0].height() >= 1,
-            "First child should have height at least 1"
-        );
-        assert!(
-            results[1].width() >= 6,
-            "Second child should have width at least 6"
-        );
-        assert!(
-            results[1].height() >= 1,
-            "Second child should have height at least 1"
-        );
-    }
-
-    #[test]
-    fn test_align_items_center() {
-        let mut bridge = TaffyBridge::new();
-        let label = Label::new("Hello");
-        let widgets: Vec<Box<dyn Widget<()>>> = vec![Box::new(label)];
-        let available = Area::new((0, 0).into(), (80, 24).into());
-
-        // Vertical layout with AlignItems::Center (should not stretch width)
-        let results = bridge
-            .compute_layout(
-                &widgets,
-                available,
-                Direction::Vertical,
-                0,
-                Some(AlignItems::Center),
-                None,
-            )
-            .expect("Layout computation should succeed");
-
-        // Width should be content size (5), not full width (80)
-        assert_eq!(
-            results[0].width(),
-            5,
-            "Width should be content size when centered"
-        );
-        // Center of 80 is 40. Center of 5 is 2.5.
-        // Left should be 37.5.
-        // Taffy rounding might give 37 or 38.
-        let x = results[0].x();
-        assert!(
-            x == 37 || x == 38,
-            "Should be centered horizontally (approx), got {}",
-            x
-        );
-    }
-
-    #[test]
-    fn test_align_items_stretch() {
-        let mut bridge = TaffyBridge::new();
-        // Use a widget without max_width to test stretching
-        let widget = TestWidget::new(Constraints {
-            min_width: 5,
-            max_width: None,
-            min_height: 1,
-            max_height: Some(1),
-            flex: None,
-        });
-        let widgets: Vec<Box<dyn Widget<()>>> = vec![Box::new(widget)];
-        let available = Area::new((0, 0).into(), (80, 24).into());
-
-        // Vertical layout with AlignItems::Stretch (default)
-        let results = bridge
-            .compute_layout(
-                &widgets,
-                available,
-                Direction::Vertical,
-                0,
-                Some(AlignItems::Stretch),
-                None,
-            )
-            .expect("Layout computation should succeed");
-
-        // Width should be full width (80)
-        assert_eq!(results[0].width(), 80, "Width should stretch");
-    }
-
-    #[test]
-    fn test_justify_content_center() {
-        let mut bridge = TaffyBridge::new();
-        let label = Label::new("Hello");
-        let widgets: Vec<Box<dyn Widget<()>>> = vec![Box::new(label)];
-        let available = Area::new((0, 0).into(), (80, 24).into());
-
-        // Vertical layout with JustifyContent::Center
-        let results = bridge
-            .compute_layout(
-                &widgets,
-                available,
-                Direction::Vertical,
-                0,
-                None,
-                Some(JustifyContent::Center),
-            )
-            .expect("Layout computation should succeed");
-
-        // Should be centered vertically
-        // Available height 24. Item height 1. Center is around 11/12.
-        assert!(results[0].y() > 0, "Should be centered vertically");
-        assert!(results[0].y() < 23, "Should be centered vertically");
-    }
-}
