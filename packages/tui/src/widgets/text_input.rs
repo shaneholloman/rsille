@@ -1,5 +1,6 @@
 //! TextInput widget — stateful text input using WidgetStore
 
+use std::borrow::Cow;
 use std::sync::Arc;
 
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
@@ -23,9 +24,20 @@ pub enum TextInputVariant {
 ///
 /// This state survives `view()` rebuilds because it lives in the store,
 /// not inside the widget instance.
+///
+/// Stores `value` for correct handling of key repeat: when multiple events
+/// arrive in one frame (e.g. holding Backspace), we use the value from the
+/// previous emit in the same batch instead of the stale `self.value` from
+/// the cached tree.
 #[derive(Debug, Clone, Default)]
 pub struct TextInputState {
     pub cursor_position: usize,
+    /// Current editing value; updated on each emit. When `modified_this_batch`
+    /// is true, we use this instead of the widget's `self.value` (which is stale).
+    pub value: Option<String>,
+    /// Set to true when we emit in this frame. Reset at start of each frame
+    /// so we sync from parent when value differs (external update).
+    pub modified_this_batch: bool,
 }
 
 /// Single-line text input field.
@@ -160,15 +172,24 @@ impl<M: Send + Sync + 'static> Widget<M> for TextInput<M> {
         let style = self.compute_style(is_focused);
         let render_style = style.to_render_style();
 
-        let border_style = ThemeManager::global().with_theme(|theme| {
-            if is_focused {
-                Style::default()
-                    .fg(theme.colors.focus_ring)
-                    .to_render_style()
-            } else {
-                Style::default().fg(theme.colors.border).to_render_style()
-            }
-        });
+        // Single theme lookup for all theme-dependent styles
+        let (border_style, placeholder_style, cursor_style) =
+            ThemeManager::global().with_theme(|theme| {
+                let border = if is_focused {
+                    Style::default()
+                        .fg(theme.colors.focus_ring)
+                        .to_render_style()
+                } else {
+                    Style::default().fg(theme.colors.border).to_render_style()
+                };
+                let placeholder =
+                    Style::default().fg(theme.colors.text_muted).to_render_style();
+                let cursor = Style::default()
+                    .fg(theme.colors.background)
+                    .bg(theme.colors.text)
+                    .to_render_style();
+                (border, placeholder, cursor)
+            });
 
         match self.variant {
             TextInputVariant::Default | TextInputVariant::Password => {
@@ -197,38 +218,40 @@ impl<M: Send + Sync + 'static> Widget<M> for TextInput<M> {
         if self.value.is_empty() {
             if !is_focused {
                 if let Some(ref placeholder) = self.placeholder {
-                    let placeholder_style = ThemeManager::global().with_theme(|theme| {
-                        Style::default()
-                            .fg(theme.colors.text_muted)
-                            .to_render_style()
-                    });
-                    let display_text: String = placeholder.chars().take(available_width).collect();
+                    let display_text: String =
+                        placeholder.chars().take(available_width).collect();
                     let _ =
                         chunk.set_string(text_start_x, text_y, &display_text, placeholder_style);
                 }
             } else {
-                let cursor_style = ThemeManager::global().with_theme(|theme| {
-                    Style::default()
-                        .fg(theme.colors.background)
-                        .bg(theme.colors.text)
-                        .to_render_style()
-                });
                 let _ = chunk.set_char(text_start_x, text_y, ' ', cursor_style);
             }
         } else {
             let text_before_cursor = &self.value[..cursor_position];
             let cursor_visual_pos = text_before_cursor.width();
 
-            let display_value = if self.variant == TextInputVariant::Password {
-                "•".repeat(self.value.chars().count())
-            } else {
-                self.value.clone()
-            };
-
-            let display_text: String = if display_value.width() > available_width {
+            // Build display text: avoid clone when no truncation needed
+            let display_text: Cow<str> = if self.variant == TextInputVariant::Password {
+                let masked = "•".repeat(self.value.chars().count());
+                if masked.width() > available_width {
+                    let mut result = String::new();
+                    let mut w = 0;
+                    for ch in masked.chars() {
+                        let ch_w = ch.width().unwrap_or(0);
+                        if w + ch_w > available_width {
+                            break;
+                        }
+                        result.push(ch);
+                        w += ch_w;
+                    }
+                    Cow::Owned(result)
+                } else {
+                    Cow::Owned(masked)
+                }
+            } else if self.value.width() > available_width {
                 let mut result = String::new();
                 let mut w = 0;
-                for ch in display_value.chars() {
+                for ch in self.value.chars() {
                     let ch_w = ch.width().unwrap_or(0);
                     if w + ch_w > available_width {
                         break;
@@ -236,21 +259,15 @@ impl<M: Send + Sync + 'static> Widget<M> for TextInput<M> {
                     result.push(ch);
                     w += ch_w;
                 }
-                result
+                Cow::Owned(result)
             } else {
-                display_value
+                Cow::Borrowed(self.value.as_str())
             };
 
-            let _ = chunk.set_string(text_start_x, text_y, &display_text, render_style);
+            let _ = chunk.set_string(text_start_x, text_y, display_text.as_ref(), render_style);
 
             if is_focused && cursor_visual_pos <= available_width {
                 let cursor_x = text_start_x + cursor_visual_pos as u16;
-                let cursor_style = ThemeManager::global().with_theme(|theme| {
-                    Style::default()
-                        .fg(theme.colors.background)
-                        .bg(theme.colors.text)
-                        .to_render_style()
-                });
                 let cursor_char = if cursor_position >= self.value.len() {
                     ' '
                 } else if self.variant == TextInputVariant::Password {
@@ -275,78 +292,116 @@ impl<M: Send + Sync + 'static> Widget<M> for TextInput<M> {
             code, modifiers, ..
         }) = event
         {
-            let state = ctx.state_mut::<TextInputState>();
-            // Clamp cursor to value length in case value changed externally
-            state.cursor_position = state.cursor_position.min(self.value.len());
+            let mut msg_to_emit: Option<M> = None;
 
-            match code {
-                KeyCode::Char(c) => {
-                    if modifiers.contains(KeyModifiers::CONTROL) {
-                        if *c == 'a' {
-                            state.cursor_position = self.value.len();
-                        }
-                        return;
-                    }
-                    let mut new_val = self.value.clone();
-                    new_val.insert(state.cursor_position, *c);
-                    state.cursor_position += c.len_utf8();
-                    if let Some(ref handler) = self.on_change {
-                        ctx.emit(handler(new_val));
-                    }
+            {
+                let state = ctx.state_mut::<TextInputState>();
+
+                // Sync from parent when value differs (external update or first focus).
+                // Don't sync when modified_this_batch: we've emitted this frame and
+                // self.value is stale; use state.value instead.
+                if !state.modified_this_batch
+                    && state.value.as_deref() != Some(self.value.as_str())
+                {
+                    state.value = Some(self.value.clone());
+                    state.cursor_position = state.cursor_position.min(self.value.len());
                 }
-                KeyCode::Backspace => {
-                    if state.cursor_position > 0 {
-                        let mut idx = state.cursor_position - 1;
-                        while idx > 0 && !self.value.is_char_boundary(idx) {
-                            idx -= 1;
+
+                let value: &str = state
+                    .value
+                    .as_deref()
+                    .unwrap_or_else(|| self.value.as_str());
+                let value_len = value.len();
+
+                // Clamp cursor to value length
+                state.cursor_position = state.cursor_position.min(value_len);
+
+                match code {
+                    KeyCode::Char(c) => {
+                        if modifiers.contains(KeyModifiers::CONTROL) {
+                            if *c == 'a' {
+                                state.cursor_position = value_len;
+                            }
+                            return;
                         }
-                        let mut new_val = self.value.clone();
-                        new_val.remove(idx);
-                        state.cursor_position = idx;
+                        let mut new_val = value.to_string();
+                        new_val.insert(state.cursor_position, *c);
+                        state.cursor_position += c.len_utf8();
+                        state.value = Some(new_val.clone());
+                        state.modified_this_batch = true;
                         if let Some(ref handler) = self.on_change {
-                            ctx.emit(handler(new_val));
+                            msg_to_emit = Some(handler(new_val));
                         }
                     }
-                }
-                KeyCode::Delete => {
-                    if state.cursor_position < self.value.len() {
-                        let mut new_val = self.value.clone();
-                        new_val.remove(state.cursor_position);
-                        if let Some(ref handler) = self.on_change {
-                            ctx.emit(handler(new_val));
+                    KeyCode::Backspace => {
+                        if state.cursor_position > 0 {
+                            let mut idx = state.cursor_position - 1;
+                            while idx > 0 && !value.is_char_boundary(idx) {
+                                idx -= 1;
+                            }
+                            let mut new_val = value.to_string();
+                            new_val.remove(idx);
+                            state.cursor_position = idx;
+                            state.value = Some(new_val.clone());
+                            state.modified_this_batch = true;
+                            if let Some(ref handler) = self.on_change {
+                                msg_to_emit = Some(handler(new_val));
+                            }
                         }
                     }
-                }
-                KeyCode::Left => {
-                    if state.cursor_position > 0 {
-                        let mut idx = state.cursor_position - 1;
-                        while idx > 0 && !self.value.is_char_boundary(idx) {
-                            idx -= 1;
+                    KeyCode::Delete => {
+                        if state.cursor_position < value_len {
+                            // Ensure we're at a char boundary for multi-byte UTF-8
+                            let mut idx = state.cursor_position;
+                            while idx < value_len && !value.is_char_boundary(idx) {
+                                idx += 1;
+                            }
+                            if idx < value_len {
+                                let mut new_val = value.to_string();
+                                new_val.remove(idx);
+                                state.value = Some(new_val.clone());
+                                state.modified_this_batch = true;
+                                if let Some(ref handler) = self.on_change {
+                                    msg_to_emit = Some(handler(new_val));
+                                }
+                            }
                         }
-                        state.cursor_position = idx;
                     }
-                }
-                KeyCode::Right => {
-                    if state.cursor_position < self.value.len() {
-                        let mut idx = state.cursor_position + 1;
-                        while idx < self.value.len() && !self.value.is_char_boundary(idx) {
-                            idx += 1;
+                    KeyCode::Left => {
+                        if state.cursor_position > 0 {
+                            let mut idx = state.cursor_position - 1;
+                            while idx > 0 && !value.is_char_boundary(idx) {
+                                idx -= 1;
+                            }
+                            state.cursor_position = idx;
                         }
-                        state.cursor_position = idx;
                     }
-                }
-                KeyCode::Home => {
-                    state.cursor_position = 0;
-                }
-                KeyCode::End => {
-                    state.cursor_position = self.value.len();
-                }
-                KeyCode::Enter => {
-                    if let Some(ref handler) = self.on_submit {
-                        ctx.emit(handler(self.value.clone()));
+                    KeyCode::Right => {
+                        if state.cursor_position < value_len {
+                            let mut idx = state.cursor_position + 1;
+                            while idx < value_len && !value.is_char_boundary(idx) {
+                                idx += 1;
+                            }
+                            state.cursor_position = idx;
+                        }
                     }
+                    KeyCode::Home => {
+                        state.cursor_position = 0;
+                    }
+                    KeyCode::End => {
+                        state.cursor_position = value_len;
+                    }
+                    KeyCode::Enter => {
+                        if let Some(ref handler) = self.on_submit {
+                            msg_to_emit = Some(handler(value.to_string()));
+                        }
+                    }
+                    _ => {}
                 }
-                _ => {}
+            }
+
+            if let Some(msg) = msg_to_emit {
+                ctx.emit(msg);
             }
         }
     }

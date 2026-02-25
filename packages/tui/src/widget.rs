@@ -217,6 +217,18 @@ impl WidgetStore {
             .expect("WidgetStore type mismatch: a different type was stored at this path")
     }
 
+    /// Apply a function to all states of type T. Used for frame-level resets.
+    pub fn for_each_state_mut<T: 'static, F>(&mut self, mut f: F)
+    where
+        F: FnMut(&[usize], &mut T),
+    {
+        for (path, state) in self.states.iter_mut() {
+            if let Some(s) = state.downcast_mut::<T>() {
+                f(path.as_slice(), s);
+            }
+        }
+    }
+
     /// Remove entries whose paths are not in the active set.
     /// Called after building the widget tree to clean up stale state.
     pub fn retain_active(&mut self, active_paths: &HashSet<Vec<usize>>) {

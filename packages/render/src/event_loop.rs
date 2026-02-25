@@ -396,6 +396,18 @@ fn event_thread(
                             if events.len() < max_event_per_frame {
                                 events.push(event);
                             }
+                            // Send immediately when we have events - don't wait for timer.
+                            // This reduces input latency (especially for key repeat) from
+                            // up to 16ms to near-zero.
+                            if !events.is_empty() {
+                                if render_rx.recv().await.is_none() {
+                                    break;
+                                }
+                                if event_tx.send(events.clone()).await.is_err() {
+                                    break;
+                                }
+                                events.clear();
+                            }
                         }
                         Some(Err(e)) => {
                             error!("Error reading event: {}", e);

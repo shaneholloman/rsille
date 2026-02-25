@@ -9,6 +9,7 @@ use render::{Draw, DrawErr, Update};
 use crate::event::{KeyCode, KeyEvent, KeyModifiers};
 use crate::focus::FocusManager;
 use crate::widget::{EventCtx, RenderCtx, Widget, WidgetStore};
+use crate::widgets::text_input::TextInputState;
 use crate::WidgetResult;
 
 pub type EventHandler<M> = Arc<dyn Fn() -> M + Send + Sync>;
@@ -237,6 +238,10 @@ where
     M: Clone + std::fmt::Debug + 'static,
 {
     fn on_events(&mut self, events: &[Event]) -> Result<(), DrawErr> {
+        // Reset TextInputState.modified_this_batch so we sync from parent when value differs
+        self.store
+            .for_each_state_mut::<TextInputState, _>(|_, s| s.modified_this_batch = false);
+
         // Ensure we have a tree (may be missing on first frame before draw)
         if self.cached_tree.is_none() {
             let tree = (self.view_fn)(&self.state);
