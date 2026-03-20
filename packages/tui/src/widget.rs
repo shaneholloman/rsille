@@ -1,11 +1,12 @@
 use std::any::Any;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::fmt;
 
 use render::chunk::Chunk;
 use smallvec::SmallVec;
 
 use crate::event::Event;
+use crate::focus::FocusConfig;
 use crate::layout::Constraints;
 
 // ---------------------------------------------------------------------------
@@ -99,6 +100,23 @@ impl WidgetPath {
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
+
+    pub fn starts_with(&self, prefix: &WidgetPath) -> bool {
+        self.0.starts_with(prefix.as_slice())
+    }
+
+    pub fn ancestors_inclusive(&self) -> Vec<WidgetPath> {
+        let mut ancestors = Vec::with_capacity(self.len() + 1);
+        ancestors.push(WidgetPath::root());
+
+        let mut path = WidgetPath::root();
+        for key in self.as_slice() {
+            path.push(key.clone());
+            ancestors.push(path.clone());
+        }
+
+        ancestors
+    }
 }
 
 impl fmt::Debug for WidgetPath {
@@ -143,19 +161,19 @@ pub trait Widget<M>: Send + Sync {
     /// `ctx.is_focused()`. The widget draws at relative coordinates within the chunk.
     fn render(&self, chunk: &mut Chunk, ctx: &RenderCtx);
 
-    /// Handle a keyboard event routed to this widget by the framework.
+    /// Handle an event routed to this widget by the framework.
     ///
-    /// Write persistent state via `ctx.state_mut::<T>()` and emit messages
-    /// via `ctx.emit(msg)`. Only called on the focused widget.
-    fn handle_event(&self, event: &Event, ctx: &mut EventCtx<M>);
+    /// Widgets receive events during capture, target, and bubble phases.
+    /// Write persistent state via `ctx.state_mut::<T>()`, emit messages via
+    /// `ctx.emit(msg)`, and request focus changes via the focus helpers.
+    fn handle_event(&self, _event: &Event, _ctx: &mut EventCtx<M>) {}
 
     /// Return size constraints for layout computation.
     fn constraints(&self) -> Constraints;
 
-    /// Whether this widget can receive keyboard focus.
-    /// The framework uses this to build the focus chain automatically.
-    fn focusable(&self) -> bool {
-        false
+    /// How this widget participates in keyboard focus.
+    fn focus_config(&self) -> FocusConfig {
+        FocusConfig::None
     }
 
     /// Return child widgets (for containers like Flex/Grid).
@@ -187,8 +205,8 @@ impl<M> Widget<M> for Box<dyn Widget<M>> {
         (**self).constraints()
     }
 
-    fn focusable(&self) -> bool {
-        (**self).focusable()
+    fn focus_config(&self) -> FocusConfig {
+        (**self).focus_config()
     }
 
     fn children(&self) -> &[Box<dyn Widget<M>>] {
@@ -227,6 +245,27 @@ impl<'a> RenderCtx<'a> {
         self.focused_path
             .map(|fp| *fp == self.current_path)
             .unwrap_or(false)
+    }
+
+    /// Whether the currently focused widget is inside this subtree.
+    pub fn is_focus_within(&self) -> bool {
+        self.focused_path
+            .map(|fp| fp.starts_with(&self.current_path))
+            .unwrap_or(false)
+    }
+
+    /// The first descendant key along the focused path, relative to this widget.
+    pub fn focused_descendant_key(&self) -> Option<&WidgetKey> {
+        let focused = self.focused_path?;
+        if !focused.starts_with(&self.current_path) || focused.len() <= self.current_path.len() {
+            return None;
+        }
+        focused.as_slice().get(self.current_path.len())
+    }
+
+    /// The globally focused path.
+    pub fn focused_path(&self) -> Option<&WidgetPath> {
+        self.focused_path
     }
 
     /// Read persistent state stored for this widget.
@@ -286,6 +325,33 @@ impl<'a> RenderCtx<'a> {
 // EventCtx – mutable context passed during event handling
 // ---------------------------------------------------------------------------
 
+/// The current event routing phase.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EventPhase {
+    Capture,
+    Target,
+    Bubble,
+}
+
+/// Requested focus change emitted by event handlers.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FocusRequest {
+    Set(WidgetPath),
+    Clear,
+    Next,
+    Prev,
+    NextInScope(Option<WidgetPath>),
+    PrevInScope(Option<WidgetPath>),
+}
+
+/// Final event outcome collected after a widget has handled an event.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EventOutcome {
+    pub handled: bool,
+    pub stop_propagation: bool,
+    pub focus_request: Option<FocusRequest>,
+}
+
 /// Context passed to [`Widget::handle_event`].
 ///
 /// Provides mutable access to the [`WidgetStore`] and message collection.
@@ -293,14 +359,30 @@ pub struct EventCtx<'a, M> {
     store: &'a mut WidgetStore,
     messages: &'a mut Vec<M>,
     path: WidgetPath,
+    focused_path: Option<WidgetPath>,
+    phase: EventPhase,
+    handled: bool,
+    stop_propagation: bool,
+    focus_request: Option<FocusRequest>,
 }
 
 impl<'a, M> EventCtx<'a, M> {
-    pub fn new(store: &'a mut WidgetStore, messages: &'a mut Vec<M>, path: WidgetPath) -> Self {
+    pub fn new(
+        store: &'a mut WidgetStore,
+        messages: &'a mut Vec<M>,
+        path: WidgetPath,
+        focused_path: Option<WidgetPath>,
+        phase: EventPhase,
+    ) -> Self {
         Self {
             store,
             messages,
             path,
+            focused_path,
+            phase,
+            handled: false,
+            stop_propagation: false,
+            focus_request: None,
         }
     }
 
@@ -312,11 +394,82 @@ impl<'a, M> EventCtx<'a, M> {
     /// Emit a message that will be delivered to the application's `update` function.
     pub fn emit(&mut self, message: M) {
         self.messages.push(message);
+        self.handled = true;
     }
 
     /// The current widget path in the tree.
     pub fn path(&self) -> &WidgetPath {
         &self.path
+    }
+
+    /// The globally focused path.
+    pub fn focused_path(&self) -> Option<&WidgetPath> {
+        self.focused_path.as_ref()
+    }
+
+    /// The current routing phase.
+    pub fn phase(&self) -> EventPhase {
+        self.phase
+    }
+
+    /// Mark the event as handled.
+    pub fn set_handled(&mut self) {
+        self.handled = true;
+    }
+
+    /// Stop event propagation after the current handler returns.
+    pub fn stop_propagation(&mut self) {
+        self.handled = true;
+        self.stop_propagation = true;
+    }
+
+    /// Request focus for the current widget.
+    pub fn request_focus_self(&mut self) {
+        self.request_focus(self.path.clone());
+    }
+
+    /// Request focus for a specific widget path.
+    pub fn request_focus(&mut self, path: WidgetPath) {
+        self.handled = true;
+        self.focus_request = Some(FocusRequest::Set(path));
+    }
+
+    /// Clear the current focus.
+    pub fn clear_focus(&mut self) {
+        self.handled = true;
+        self.focus_request = Some(FocusRequest::Clear);
+    }
+
+    /// Move focus to the next global focus target.
+    pub fn focus_next(&mut self) {
+        self.handled = true;
+        self.focus_request = Some(FocusRequest::Next);
+    }
+
+    /// Move focus to the previous global focus target.
+    pub fn focus_prev(&mut self) {
+        self.handled = true;
+        self.focus_request = Some(FocusRequest::Prev);
+    }
+
+    /// Move focus to the next target within the given scope.
+    pub fn focus_next_in_scope(&mut self, scope: Option<WidgetPath>) {
+        self.handled = true;
+        self.focus_request = Some(FocusRequest::NextInScope(scope));
+    }
+
+    /// Move focus to the previous target within the given scope.
+    pub fn focus_prev_in_scope(&mut self, scope: Option<WidgetPath>) {
+        self.handled = true;
+        self.focus_request = Some(FocusRequest::PrevInScope(scope));
+    }
+
+    pub fn finish(self) -> EventOutcome {
+        EventOutcome {
+            handled: self.handled,
+            stop_propagation: self.stop_propagation,
+            focus_request: self.focus_request,
+        }
     }
 }
 
@@ -370,8 +523,11 @@ impl WidgetStore {
 
     /// Remove entries whose paths are not in the active set.
     /// Called after building the widget tree to clean up stale state.
-    pub fn retain_active(&mut self, active_paths: &HashSet<WidgetPath>) {
-        self.states.retain(|path, _| active_paths.contains(path));
+    pub fn retain_active<F>(&mut self, mut is_active: F)
+    where
+        F: FnMut(&WidgetPath) -> bool,
+    {
+        self.states.retain(|path, _| is_active(path));
     }
 }
 

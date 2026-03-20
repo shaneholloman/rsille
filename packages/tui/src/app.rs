@@ -8,7 +8,10 @@ use render::{Draw, DrawErr, Update};
 
 use crate::event::{KeyCode, KeyEvent, KeyModifiers};
 use crate::focus::FocusManager;
-use crate::widget::{EventCtx, RenderCtx, Widget, WidgetKey, WidgetStore};
+use crate::widget::{
+    EventCtx, EventPhase, FocusRequest, RenderCtx, Widget, WidgetKey, WidgetPath,
+    WidgetStore,
+};
 use crate::widgets::text_input::TextInputState;
 use crate::WidgetResult;
 
@@ -204,6 +207,159 @@ struct AppRuntime<State, F, V, M> {
     inline_max_height: u16,
 }
 
+impl<State, F, V, M> AppRuntime<State, F, V, M> {
+    fn ensure_tree(&mut self)
+    where
+        V: Fn(&State) -> Box<dyn Widget<M>>,
+    {
+        if self.cached_tree.is_none() {
+            let tree = (self.view_fn)(&self.state);
+            self.focus.rebuild(tree.as_ref());
+            self.store
+                .retain_active(|path| self.focus.live_paths().contains(path));
+            self.cached_tree = Some(tree);
+        }
+    }
+
+    fn build_event_route<'a>(
+        tree: &'a dyn Widget<M>,
+        target_path: Option<&WidgetPath>,
+    ) -> Vec<(WidgetPath, &'a dyn Widget<M>)> {
+        let mut route = vec![(WidgetPath::root(), tree)];
+        let Some(target_path) = target_path else {
+            return route;
+        };
+
+        let mut current_widget = tree;
+        let mut current_path = WidgetPath::root();
+
+        for key in target_path.as_slice() {
+            let children = current_widget.children();
+            let next = match key {
+                WidgetKey::Index(idx) => children.get(*idx).map(|child| child.as_ref()),
+                WidgetKey::Named(name) => children
+                    .iter()
+                    .find(|child| child.key() == Some(name.as_str()))
+                    .map(|child| child.as_ref()),
+            };
+
+            let Some(next_widget) = next else {
+                break;
+            };
+
+            current_path.push(key.clone());
+            route.push((current_path.clone(), next_widget));
+            current_widget = next_widget;
+        }
+
+        route
+    }
+
+    fn dispatch_to_widget(
+        widget: &dyn Widget<M>,
+        event: &Event,
+        store: &mut WidgetStore,
+        messages: &mut Vec<M>,
+        path: WidgetPath,
+        focused_path: Option<WidgetPath>,
+        phase: EventPhase,
+    ) -> crate::widget::EventOutcome {
+        let mut ctx = EventCtx::new(store, messages, path, focused_path, phase);
+        widget.handle_event(event, &mut ctx);
+        ctx.finish()
+    }
+
+    fn apply_focus_request(focus: &mut FocusManager, request: Option<FocusRequest>) {
+        match request {
+            Some(FocusRequest::Set(path)) => {
+                focus.request_focus(&path);
+            }
+            Some(FocusRequest::Clear) => {
+                focus.clear();
+            }
+            Some(FocusRequest::Next) => {
+                focus.next();
+            }
+            Some(FocusRequest::Prev) => {
+                focus.prev();
+            }
+            Some(FocusRequest::NextInScope(scope)) => {
+                focus.next_in_scope(scope.as_ref());
+            }
+            Some(FocusRequest::PrevInScope(scope)) => {
+                focus.prev_in_scope(scope.as_ref());
+            }
+            None => {}
+        }
+    }
+
+    fn dispatch_widget_event(
+        tree: &dyn Widget<M>,
+        event: &Event,
+        store: &mut WidgetStore,
+        messages: &mut Vec<M>,
+        focus: &mut FocusManager,
+    ) -> bool {
+        let route = Self::build_event_route(tree, focus.current_path());
+        let mut handled = false;
+        let focused_snapshot = focus.current_path().cloned();
+        let ancestor_len = route.len().saturating_sub(1);
+
+        for (path, widget) in route.iter().take(ancestor_len) {
+            let outcome = Self::dispatch_to_widget(
+                *widget,
+                event,
+                store,
+                messages,
+                path.clone(),
+                focused_snapshot.clone(),
+                EventPhase::Capture,
+            );
+            handled |= outcome.handled;
+            Self::apply_focus_request(focus, outcome.focus_request);
+            if outcome.stop_propagation {
+                return handled;
+            }
+        }
+
+        if let Some((path, widget)) = route.last() {
+            let outcome = Self::dispatch_to_widget(
+                *widget,
+                event,
+                store,
+                messages,
+                path.clone(),
+                focused_snapshot.clone(),
+                EventPhase::Target,
+            );
+            handled |= outcome.handled;
+            Self::apply_focus_request(focus, outcome.focus_request);
+            if outcome.stop_propagation {
+                return handled;
+            }
+        }
+
+        for (path, widget) in route.iter().take(ancestor_len).rev() {
+            let outcome = Self::dispatch_to_widget(
+                *widget,
+                event,
+                store,
+                messages,
+                path.clone(),
+                focused_snapshot.clone(),
+                EventPhase::Bubble,
+            );
+            handled |= outcome.handled;
+            Self::apply_focus_request(focus, outcome.focus_request);
+            if outcome.stop_propagation {
+                return handled;
+            }
+        }
+
+        handled
+    }
+}
+
 impl<State, F, V, M> Draw for AppRuntime<State, F, V, M>
 where
     F: Fn(&mut State, M),
@@ -218,6 +374,8 @@ where
 
         // Rebuild focus chain
         self.focus.rebuild(tree.as_ref());
+        self.store
+            .retain_active(|path| self.focus.live_paths().contains(path));
 
         // Render
         let focused_path = self.focus.current_path();
@@ -243,11 +401,7 @@ where
             .for_each_state_mut::<TextInputState, _>(|_, s| s.modified_this_batch = false);
 
         // Ensure we have a tree (may be missing on first frame before draw)
-        if self.cached_tree.is_none() {
-            let tree = (self.view_fn)(&self.state);
-            self.focus.rebuild(tree.as_ref());
-            self.cached_tree = Some(tree);
-        }
+        self.ensure_tree();
 
         let tree = self.cached_tree.as_ref().unwrap();
 
@@ -256,13 +410,23 @@ where
                 continue;
             }
 
-            // Only handle keyboard events
+            if Self::dispatch_widget_event(
+                tree.as_ref(),
+                event,
+                &mut self.store,
+                &mut self.messages,
+                &mut self.focus,
+            ) {
+                continue;
+            }
+
+            // Only handle keyboard events after widget propagation.
             let key_event = match event {
                 Event::Key(k) => k,
                 _ => continue,
             };
 
-            // 1. Tab / Shift+Tab → focus navigation
+            // 1. Tab / Shift+Tab → default focus navigation
             match key_event.code {
                 KeyCode::Tab if key_event.modifiers.contains(KeyModifiers::SHIFT) => {
                     self.focus.prev();
@@ -296,43 +460,6 @@ where
             // 3. Global key handlers
             if let Some(handler) = self.global_key_handlers.get(&key_event.code) {
                 self.messages.push(handler());
-                continue;
-            }
-
-            // 4. Route to focused widget
-            if let Some(focus_path) = self.focus.current_path() {
-                let focus_path = focus_path.clone();
-                // Navigate tree to the focused widget
-                let mut widget: &dyn Widget<M> = tree.as_ref();
-                let mut valid = true;
-                for key in focus_path.as_slice() {
-                    let children = widget.children();
-                    let found = match key {
-                        WidgetKey::Index(idx) => {
-                            children.get(*idx).map(|c| c.as_ref())
-                        }
-                        WidgetKey::Named(name) => children
-                            .iter()
-                            .find(|c| c.key() == Some(name.as_str()))
-                            .map(|c| c.as_ref()),
-                    };
-                    if let Some(child) = found {
-                        widget = child;
-                    } else {
-                        valid = false;
-                        break;
-                    }
-                }
-
-                if valid {
-                    let mut messages = Vec::new();
-                    {
-                        let mut ctx =
-                            EventCtx::new(&mut self.store, &mut messages, focus_path);
-                        widget.handle_event(event, &mut ctx);
-                    }
-                    self.messages.extend(messages);
-                }
             }
         }
 

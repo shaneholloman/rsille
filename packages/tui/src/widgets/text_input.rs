@@ -6,10 +6,11 @@ use std::sync::Arc;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::event::{Event, KeyCode, KeyEvent, KeyModifiers};
+use crate::focus::FocusConfig;
 use crate::layout::border_renderer;
 use crate::layout::Constraints;
 use crate::style::{BorderStyle, Style, ThemeManager};
-use crate::widget::{EventCtx, RenderCtx, Widget};
+use crate::widget::{EventCtx, EventPhase, RenderCtx, Widget};
 
 /// Text input style variants.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -291,6 +292,9 @@ impl<M: Send + Sync + 'static> Widget<M> for TextInput<M> {
     }
 
     fn handle_event(&self, event: &Event, ctx: &mut EventCtx<M>) {
+        if ctx.phase() != EventPhase::Target {
+            return;
+        }
         if self.disabled {
             return;
         }
@@ -423,8 +427,12 @@ impl<M: Send + Sync + 'static> Widget<M> for TextInput<M> {
         }
     }
 
-    fn focusable(&self) -> bool {
-        !self.disabled
+    fn focus_config(&self) -> FocusConfig {
+        if self.disabled {
+            FocusConfig::None
+        } else {
+            FocusConfig::Leaf
+        }
     }
 
     fn key(&self) -> Option<&str> {

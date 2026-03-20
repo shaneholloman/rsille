@@ -5,6 +5,7 @@ use render::area::Area;
 use super::border_renderer::{render_background, render_border};
 use super::taffy_bridge::TaffyBridge;
 use crate::event::Event;
+use crate::focus::{FocusConfig, FocusScope};
 use crate::layout::Constraints;
 use crate::style::{BorderStyle, Padding, Style, ThemeManager};
 use crate::widget::{EventCtx, IntoWidget, RenderCtx, Widget, WidgetKey};
@@ -30,6 +31,7 @@ pub struct Flex<M = ()> {
     style: Style,
     align_items: Option<AlignItems>,
     justify_content: Option<JustifyContent>,
+    focus_scope: Option<FocusScope>,
     widget_key: Option<String>,
 }
 
@@ -59,6 +61,7 @@ impl<M> Flex<M> {
             style: Style::default(),
             align_items: None,
             justify_content: None,
+            focus_scope: None,
             widget_key: None,
         }
     }
@@ -108,6 +111,19 @@ impl<M> Flex<M> {
     pub fn key(mut self, name: impl Into<String>) -> Self {
         self.widget_key = Some(name.into());
         self
+    }
+
+    pub fn focus_scope(mut self, scope: FocusScope) -> Self {
+        self.focus_scope = Some(scope);
+        self
+    }
+
+    pub fn trap_focus(self) -> Self {
+        self.focus_scope(
+            FocusScope::new()
+                .trap_tab(true)
+                .entry(crate::focus::ScopeEntry::LastFocused),
+        )
     }
 
     pub fn when<F>(self, condition: bool, f: F) -> Self
@@ -296,6 +312,13 @@ impl<M: Send + Sync> Widget<M> for Flex<M> {
 
     fn children(&self) -> &[Box<dyn Widget<M>>] {
         &self.children
+    }
+
+    fn focus_config(&self) -> FocusConfig {
+        self.focus_scope
+            .clone()
+            .map(FocusConfig::Scope)
+            .unwrap_or(FocusConfig::None)
     }
 
     fn key(&self) -> Option<&str> {

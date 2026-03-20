@@ -3,9 +3,10 @@
 use std::sync::Arc;
 
 use crate::event::{Event, KeyCode};
+use crate::focus::FocusConfig;
 use crate::layout::Constraints;
 use crate::style::{Color, Style, ThemeManager};
-use crate::widget::{EventCtx, RenderCtx, Widget};
+use crate::widget::{EventCtx, EventPhase, RenderCtx, Widget};
 
 /// Button style variants.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -182,6 +183,9 @@ impl<M: Send + Sync> Widget<M> for Button<M> {
     }
 
     fn handle_event(&self, event: &Event, ctx: &mut EventCtx<M>) {
+        if ctx.phase() != EventPhase::Target {
+            return;
+        }
         if self.disabled {
             return;
         }
@@ -210,8 +214,12 @@ impl<M: Send + Sync> Widget<M> for Button<M> {
         }
     }
 
-    fn focusable(&self) -> bool {
-        !self.disabled
+    fn focus_config(&self) -> FocusConfig {
+        if self.disabled {
+            FocusConfig::None
+        } else {
+            FocusConfig::Leaf
+        }
     }
 
     fn key(&self) -> Option<&str> {

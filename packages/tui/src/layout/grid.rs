@@ -7,6 +7,7 @@ use super::grid_placement::GridPlacement;
 use super::grid_track::GridTrack;
 use super::taffy_bridge::TaffyBridge;
 use crate::event::Event;
+use crate::focus::{FocusConfig, FocusScope};
 use crate::layout::Constraints;
 use crate::style::{BorderStyle, Padding, Style};
 use crate::widget::{EventCtx, IntoWidget, RenderCtx, Widget, WidgetKey};
@@ -28,6 +29,7 @@ pub struct Grid<M = ()> {
     style: Style,
     align_items: Option<AlignItems>,
     justify_items: Option<JustifyItems>,
+    focus_scope: Option<FocusScope>,
     widget_key: Option<String>,
 }
 
@@ -60,6 +62,7 @@ impl<M> Grid<M> {
             style: Style::default(),
             align_items: None,
             justify_items: None,
+            focus_scope: None,
             widget_key: None,
         }
     }
@@ -127,6 +130,19 @@ impl<M> Grid<M> {
     pub fn key(mut self, name: impl Into<String>) -> Self {
         self.widget_key = Some(name.into());
         self
+    }
+
+    pub fn focus_scope(mut self, scope: FocusScope) -> Self {
+        self.focus_scope = Some(scope);
+        self
+    }
+
+    pub fn trap_focus(self) -> Self {
+        self.focus_scope(
+            FocusScope::new()
+                .trap_tab(true)
+                .entry(crate::focus::ScopeEntry::LastFocused),
+        )
     }
 
     pub fn when<F>(self, condition: bool, f: F) -> Self
@@ -301,6 +317,13 @@ impl<M: Send + Sync> Widget<M> for Grid<M> {
 
     fn children(&self) -> &[Box<dyn Widget<M>>] {
         &self.children
+    }
+
+    fn focus_config(&self) -> FocusConfig {
+        self.focus_scope
+            .clone()
+            .map(FocusConfig::Scope)
+            .unwrap_or(FocusConfig::None)
     }
 
     fn key(&self) -> Option<&str> {
