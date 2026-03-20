@@ -9,8 +9,7 @@ use render::{Draw, DrawErr, Update};
 use crate::event::{KeyCode, KeyEvent, KeyModifiers};
 use crate::focus::FocusManager;
 use crate::widget::{
-    EventCtx, EventPhase, FocusRequest, RenderCtx, Widget, WidgetKey, WidgetPath,
-    WidgetStore,
+    EventCtx, EventPhase, FocusRequest, RenderCtx, Widget, WidgetKey, WidgetPath, WidgetStore,
 };
 use crate::widgets::text_input::TextInputState;
 use crate::WidgetResult;
@@ -30,7 +29,6 @@ pub enum QuitBehavior {
     /// Disable built-in quit handling.
     Disabled,
 }
-
 
 // ---------------------------------------------------------------------------
 // App – public builder API
@@ -168,10 +166,7 @@ impl<State, M: Clone + std::fmt::Debug + Send + Sync + 'static> App<State, M> {
                 .frame_limit(60)
                 .size((width, buffer_height));
         } else {
-            builder
-                .enable_all()
-                .frame_limit(60)
-                .size((width, height));
+            builder.enable_all().frame_limit(60).size((width, height));
         }
 
         let mut event_loop = builder.build_event_loop(runtime);

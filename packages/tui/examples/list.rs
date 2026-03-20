@@ -44,7 +44,9 @@ fn view(state: &State) -> impl Widget<Msg> {
         .padding(Padding::uniform(1))
         .gap(1)
         .child(label("Pick a framework milestone:"))
-        .child(label("The list is focused initially. Use Up/Down right away, Tab moves to the button."))
+        .child(label(
+            "The list is focused initially. Use Up/Down right away, Tab moves to the button.",
+        ))
         .child(
             list::<Msg>()
                 .key("milestones")

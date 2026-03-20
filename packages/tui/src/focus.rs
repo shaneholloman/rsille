@@ -142,7 +142,9 @@ impl FocusAnalysis {
     }
 
     pub fn first_descendant_target(&self, path: &WidgetPath) -> Option<&WidgetPath> {
-        self.focus_targets.iter().find(|candidate| candidate.starts_with(path))
+        self.focus_targets
+            .iter()
+            .find(|candidate| candidate.starts_with(path))
     }
 }
 
@@ -251,8 +253,7 @@ impl FocusManager {
 
         if matches!(scope.entry, ScopeEntry::LastFocused) {
             if let Some(remembered) = self.scope_memory.get(scope_path) {
-                if self.analysis.is_focus_target(remembered) && remembered.starts_with(scope_path)
-                {
+                if self.analysis.is_focus_target(remembered) && remembered.starts_with(scope_path) {
                     return Some(remembered.clone());
                 }
             }
@@ -275,8 +276,7 @@ impl FocusManager {
 
         if scope.restore_focus {
             if let Some(remembered) = self.scope_memory.get(scope_path) {
-                if self.analysis.is_focus_target(remembered) && remembered.starts_with(scope_path)
-                {
+                if self.analysis.is_focus_target(remembered) && remembered.starts_with(scope_path) {
                     return Some(remembered.clone());
                 }
             }

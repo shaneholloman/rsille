@@ -283,8 +283,7 @@ impl<M: Send + Sync> Widget<M> for Grid<M> {
             Err(_) => return,
         };
 
-        for (index, (child, child_area)) in
-            self.children.iter().zip(child_areas.iter()).enumerate()
+        for (index, (child, child_area)) in self.children.iter().zip(child_areas.iter()).enumerate()
         {
             if child_area.width() == 0 || child_area.height() == 0 {
                 continue;

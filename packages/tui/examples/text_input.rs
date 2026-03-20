@@ -36,5 +36,8 @@ fn view(state: &String) -> impl Widget<Msg> {
                 .on_change(Msg::NameChanged)
                 .on_submit(Msg::Submitted),
         )
-        .child(label(format!("Hello, {}!", if state.is_empty() { "..." } else { state })))
+        .child(label(format!(
+            "Hello, {}!",
+            if state.is_empty() { "..." } else { state }
+        )))
 }

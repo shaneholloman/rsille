@@ -35,6 +35,10 @@ fn view(state: &i32) -> impl Widget<Msg> {
                 .gap(2)
                 .child(button("+1").on_click(|| Msg::Increment))
                 .child(button("-1").on_click(|| Msg::Decrement))
-                .child(button("Reset").variant(ButtonVariant::Secondary).on_click(|| Msg::Reset)),
+                .child(
+                    button("Reset")
+                        .variant(ButtonVariant::Secondary)
+                        .on_click(|| Msg::Reset),
+                ),
         )
 }

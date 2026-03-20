@@ -279,9 +279,8 @@ impl<M: Send + Sync + 'static> Widget<M> for List<M> {
             .unwrap_or(base_style)
             .to_render_style();
         let active_row_style = active_style.to_render_style();
-        let disabled_row_style = ThemeManager::global().with_theme(|theme| {
-            theme.styles.interactive_disabled.to_render_style()
-        });
+        let disabled_row_style = ThemeManager::global()
+            .with_theme(|theme| theme.styles.interactive_disabled.to_render_style());
         let border_style = ThemeManager::global().with_theme(|theme| {
             if is_focused {
                 Style::default()
@@ -294,16 +293,16 @@ impl<M: Send + Sync + 'static> Widget<M> for List<M> {
 
         let _ = chunk.fill(0, 0, area.width(), area.height(), ' ', row_style);
 
-        let (content_x, content_y, content_width, content_height) = if let Some(border) = self.border
-        {
-            if area.width() < 2 || area.height() < 2 {
-                return;
-            }
-            border_renderer::render_border(chunk, border, border_style);
-            (1u16, 1u16, area.width() - 2, area.height() - 2)
-        } else {
-            (0u16, 0u16, area.width(), area.height())
-        };
+        let (content_x, content_y, content_width, content_height) =
+            if let Some(border) = self.border {
+                if area.width() < 2 || area.height() < 2 {
+                    return;
+                }
+                border_renderer::render_border(chunk, border, border_style);
+                (1u16, 1u16, area.width() - 2, area.height() - 2)
+            } else {
+                (0u16, 0u16, area.width(), area.height())
+            };
 
         if content_width == 0 || content_height == 0 {
             return;
@@ -431,7 +430,8 @@ impl<M: Send + Sync + 'static> Widget<M> for List<M> {
 
         if moved {
             ctx.set_handled();
-            if let (Some(active_id), Some(ref handler)) = (next_active_id, self.on_change.as_ref()) {
+            if let (Some(active_id), Some(handler)) = (next_active_id, self.on_change.as_ref())
+            {
                 ctx.emit(handler(active_id));
             }
         }

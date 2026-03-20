@@ -190,8 +190,9 @@ impl<M: Send + Sync + 'static> Widget<M> for TextInput<M> {
                 } else {
                     Style::default().fg(theme.colors.border).to_render_style()
                 };
-                let placeholder =
-                    Style::default().fg(theme.colors.text_muted).to_render_style();
+                let placeholder = Style::default()
+                    .fg(theme.colors.text_muted)
+                    .to_render_style();
                 let cursor = Style::default()
                     .fg(theme.colors.background)
                     .bg(theme.colors.text)
@@ -226,8 +227,7 @@ impl<M: Send + Sync + 'static> Widget<M> for TextInput<M> {
         if self.value.is_empty() {
             if !is_focused {
                 if let Some(ref placeholder) = self.placeholder {
-                    let display_text: String =
-                        placeholder.chars().take(available_width).collect();
+                    let display_text: String = placeholder.chars().take(available_width).collect();
                     let _ =
                         chunk.set_string(text_start_x, text_y, &display_text, placeholder_style);
                 }
@@ -281,10 +281,7 @@ impl<M: Send + Sync + 'static> Widget<M> for TextInput<M> {
                 } else if self.variant == TextInputVariant::Password {
                     '•'
                 } else {
-                    self.value[cursor_position..]
-                        .chars()
-                        .next()
-                        .unwrap_or(' ')
+                    self.value[cursor_position..].chars().next().unwrap_or(' ')
                 };
                 let _ = chunk.set_char(cursor_x, text_y, cursor_char, cursor_style);
             }
@@ -311,8 +308,7 @@ impl<M: Send + Sync + 'static> Widget<M> for TextInput<M> {
                 // Sync from parent when value differs (external update or first focus).
                 // Don't sync when modified_this_batch: we've emitted this frame and
                 // self.value is stale; use state.value instead.
-                if !state.modified_this_batch
-                    && state.value.as_deref() != Some(self.value.as_str())
+                if !state.modified_this_batch && state.value.as_deref() != Some(self.value.as_str())
                 {
                     state.value = Some(self.value.clone());
                     state.cursor_position = state.cursor_position.min(self.value.len());
@@ -321,7 +317,7 @@ impl<M: Send + Sync + 'static> Widget<M> for TextInput<M> {
                 let value: &str = state
                     .value
                     .as_deref()
-                    .unwrap_or_else(|| self.value.as_str());
+                    .unwrap_or(self.value.as_str());
                 let value_len = value.len();
 
                 // Clamp cursor to value length
