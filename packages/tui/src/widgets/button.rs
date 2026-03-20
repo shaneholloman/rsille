@@ -26,6 +26,7 @@ pub struct Button<M = ()> {
     variant: ButtonVariant,
     disabled: bool,
     on_click: Option<Arc<dyn Fn() -> M + Send + Sync>>,
+    widget_key: Option<String>,
 }
 
 impl<M> std::fmt::Debug for Button<M> {
@@ -46,7 +47,13 @@ impl<M> Button<M> {
             variant: ButtonVariant::default(),
             disabled: false,
             on_click: None,
+            widget_key: None,
         }
+    }
+
+    pub fn key(mut self, name: impl Into<String>) -> Self {
+        self.widget_key = Some(name.into());
+        self
     }
 
     pub fn variant(mut self, variant: ButtonVariant) -> Self {
@@ -205,6 +212,10 @@ impl<M: Send + Sync> Widget<M> for Button<M> {
 
     fn focusable(&self) -> bool {
         !self.disabled
+    }
+
+    fn key(&self) -> Option<&str> {
+        self.widget_key.as_deref()
     }
 }
 

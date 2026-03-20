@@ -1,4 +1,4 @@
-use crate::widget::Widget;
+use crate::widget::{Widget, WidgetKey, WidgetPath};
 
 /// Manages keyboard focus navigation across focusable widgets.
 ///
@@ -6,8 +6,8 @@ use crate::widget::Widget;
 /// themselves do not participate in focus chain construction.
 #[derive(Debug, Default)]
 pub struct FocusManager {
-    /// Ordered list of focusable widget paths (tree indices from root).
-    chain: Vec<Vec<usize>>,
+    /// Ordered list of focusable widget paths.
+    chain: Vec<WidgetPath>,
     /// Current focus index into `chain`. `usize::MAX` means nothing focused.
     index: usize,
 }
@@ -24,10 +24,10 @@ impl FocusManager {
     /// Automatically preserves focus on the same path if it still exists,
     /// otherwise focuses the first focusable widget.
     pub fn rebuild<M>(&mut self, root: &dyn Widget<M>) {
-        let old_path = self.current_path().map(|p| p.to_vec());
+        let old_path = self.current_path().cloned();
 
         self.chain.clear();
-        let mut path = Vec::new();
+        let mut path = WidgetPath::root();
         Self::collect_focusable(root, &mut path, &mut self.chain);
 
         // Try to keep focus on the same path
@@ -70,26 +70,26 @@ impl FocusManager {
     }
 
     /// The path of the currently focused widget, or `None`.
-    pub fn current_path(&self) -> Option<&[usize]> {
-        self.chain.get(self.index).map(|v| v.as_slice())
+    pub fn current_path(&self) -> Option<&WidgetPath> {
+        self.chain.get(self.index)
     }
 
     /// All focusable widget paths (used for store cleanup).
-    pub fn active_paths(&self) -> &[Vec<usize>] {
+    pub fn active_paths(&self) -> &[WidgetPath] {
         &self.chain
     }
 
     /// Recursively collect focusable widgets into `out`.
     fn collect_focusable<M>(
         widget: &dyn Widget<M>,
-        path: &mut Vec<usize>,
-        out: &mut Vec<Vec<usize>>,
+        path: &mut WidgetPath,
+        out: &mut Vec<WidgetPath>,
     ) {
         if widget.focusable() {
             out.push(path.clone());
         }
         for (i, child) in widget.children().iter().enumerate() {
-            path.push(i);
+            path.push(WidgetKey::for_child(i, child.as_ref()));
             Self::collect_focusable(child.as_ref(), path, out);
             path.pop();
         }

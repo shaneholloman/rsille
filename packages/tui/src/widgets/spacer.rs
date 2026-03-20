@@ -8,6 +8,7 @@ use crate::widget::{EventCtx, RenderCtx, Widget};
 #[derive(Debug, Clone)]
 pub struct Spacer<M = ()> {
     constraints: Constraints,
+    widget_key: Option<String>,
     _phantom: std::marker::PhantomData<M>,
 }
 
@@ -15,8 +16,14 @@ impl<M> Spacer<M> {
     pub fn new() -> Self {
         Self {
             constraints: Constraints::content(),
+            widget_key: None,
             _phantom: std::marker::PhantomData,
         }
+    }
+
+    pub fn key(mut self, name: impl Into<String>) -> Self {
+        self.widget_key = Some(name.into());
+        self
     }
 
     pub fn fixed(mut self, width: u16, height: u16) -> Self {
@@ -65,6 +72,10 @@ impl<M: Send + Sync> Widget<M> for Spacer<M> {
 
     fn constraints(&self) -> Constraints {
         self.constraints
+    }
+
+    fn key(&self) -> Option<&str> {
+        self.widget_key.as_deref()
     }
 }
 

@@ -1,10 +1,134 @@
 use std::any::Any;
 use std::collections::{HashMap, HashSet};
+use std::fmt;
 
 use render::chunk::Chunk;
+use smallvec::SmallVec;
 
 use crate::event::Event;
 use crate::layout::Constraints;
+
+// ---------------------------------------------------------------------------
+// WidgetKey & WidgetPath – stable widget identity
+// ---------------------------------------------------------------------------
+
+/// A single segment in a widget path.
+///
+/// Widgets can be identified by their positional index (default) or by a
+/// user-assigned stable name. Named keys survive reordering of siblings,
+/// making persistent state (scroll offsets, cursor positions, …) robust
+/// against dynamic list changes.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum WidgetKey {
+    Index(usize),
+    Named(String),
+}
+
+impl WidgetKey {
+    /// Determine the key for a child widget: use the widget's own key if set,
+    /// otherwise fall back to its positional index.
+    pub fn for_child<M>(index: usize, widget: &dyn Widget<M>) -> Self {
+        match widget.key() {
+            Some(name) => WidgetKey::Named(name.to_owned()),
+            None => WidgetKey::Index(index),
+        }
+    }
+}
+
+impl From<usize> for WidgetKey {
+    fn from(i: usize) -> Self {
+        WidgetKey::Index(i)
+    }
+}
+
+impl From<&str> for WidgetKey {
+    fn from(s: &str) -> Self {
+        WidgetKey::Named(s.to_owned())
+    }
+}
+
+impl From<String> for WidgetKey {
+    fn from(s: String) -> Self {
+        WidgetKey::Named(s)
+    }
+}
+
+impl fmt::Display for WidgetKey {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            WidgetKey::Index(i) => write!(f, "{i}"),
+            WidgetKey::Named(s) => write!(f, "\"{s}\""),
+        }
+    }
+}
+
+/// Path from the root of the widget tree to a specific widget.
+///
+/// Each segment is a [`WidgetKey`] identifying the child at that level.
+/// Uses `SmallVec` to avoid heap allocation for typical tree depths (≤ 8).
+#[derive(Clone, PartialEq, Eq, Hash, Default)]
+pub struct WidgetPath(SmallVec<[WidgetKey; 8]>);
+
+impl WidgetPath {
+    pub fn root() -> Self {
+        Self(SmallVec::new())
+    }
+
+    pub fn child(&self, key: impl Into<WidgetKey>) -> Self {
+        let mut p = self.0.clone();
+        p.push(key.into());
+        Self(p)
+    }
+
+    pub fn push(&mut self, key: impl Into<WidgetKey>) {
+        self.0.push(key.into());
+    }
+
+    pub fn pop(&mut self) -> Option<WidgetKey> {
+        self.0.pop()
+    }
+
+    pub fn as_slice(&self) -> &[WidgetKey] {
+        &self.0
+    }
+
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
+impl fmt::Debug for WidgetPath {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "WidgetPath[")?;
+        for (i, key) in self.0.iter().enumerate() {
+            if i > 0 {
+                write!(f, " → ")?;
+            }
+            write!(f, "{key}")?;
+        }
+        write!(f, "]")
+    }
+}
+
+impl fmt::Display for WidgetPath {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        for (i, key) in self.0.iter().enumerate() {
+            if i > 0 {
+                write!(f, "/")?;
+            }
+            write!(f, "{key}")?;
+        }
+        Ok(())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Widget trait
+// ---------------------------------------------------------------------------
 
 /// Core widget trait that all TUI components implement.
 ///
@@ -39,6 +163,15 @@ pub trait Widget<M>: Send + Sync {
     fn children(&self) -> &[Box<dyn Widget<M>>] {
         &[]
     }
+
+    /// Return a stable key for this widget.
+    ///
+    /// When set, the framework uses this key (instead of the positional index)
+    /// to identify the widget in the tree. This makes persistent state survive
+    /// sibling reordering — useful for dynamic lists.
+    fn key(&self) -> Option<&str> {
+        None
+    }
 }
 
 impl<M> Widget<M> for Box<dyn Widget<M>> {
@@ -61,6 +194,10 @@ impl<M> Widget<M> for Box<dyn Widget<M>> {
     fn children(&self) -> &[Box<dyn Widget<M>>] {
         (**self).children()
     }
+
+    fn key(&self) -> Option<&str> {
+        (**self).key()
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -72,23 +209,23 @@ impl<M> Widget<M> for Box<dyn Widget<M>> {
 /// Provides read-only access to the [`WidgetStore`] and focus information.
 pub struct RenderCtx<'a> {
     store: &'a WidgetStore,
-    focused_path: Option<&'a [usize]>,
-    current_path: Vec<usize>,
+    focused_path: Option<&'a WidgetPath>,
+    current_path: WidgetPath,
 }
 
 impl<'a> RenderCtx<'a> {
-    pub fn new(store: &'a WidgetStore, focused_path: Option<&'a [usize]>) -> Self {
+    pub fn new(store: &'a WidgetStore, focused_path: Option<&'a WidgetPath>) -> Self {
         Self {
             store,
             focused_path,
-            current_path: Vec::new(),
+            current_path: WidgetPath::root(),
         }
     }
 
     /// Whether the current widget has keyboard focus.
     pub fn is_focused(&self) -> bool {
         self.focused_path
-            .map(|fp| fp == self.current_path.as_slice())
+            .map(|fp| *fp == self.current_path)
             .unwrap_or(false)
     }
 
@@ -126,19 +263,21 @@ impl<'a> RenderCtx<'a> {
         })
     }
 
-    /// Create a child context for rendering a child at the given index.
-    pub fn child_ctx(&self, index: usize) -> RenderCtx<'a> {
-        let mut child_path = self.current_path.clone();
-        child_path.push(index);
+    /// Create a child context for rendering a child widget.
+    ///
+    /// The `key` identifies the child — use [`WidgetKey::for_child`] to
+    /// automatically pick a named key when the child widget provides one,
+    /// falling back to the positional index.
+    pub fn child_ctx(&self, key: impl Into<WidgetKey>) -> RenderCtx<'a> {
         RenderCtx {
             store: self.store,
             focused_path: self.focused_path,
-            current_path: child_path,
+            current_path: self.current_path.child(key),
         }
     }
 
     /// The current widget path in the tree.
-    pub fn path(&self) -> &[usize] {
+    pub fn path(&self) -> &WidgetPath {
         &self.current_path
     }
 }
@@ -153,11 +292,11 @@ impl<'a> RenderCtx<'a> {
 pub struct EventCtx<'a, M> {
     store: &'a mut WidgetStore,
     messages: &'a mut Vec<M>,
-    path: Vec<usize>,
+    path: WidgetPath,
 }
 
 impl<'a, M> EventCtx<'a, M> {
-    pub fn new(store: &'a mut WidgetStore, messages: &'a mut Vec<M>, path: Vec<usize>) -> Self {
+    pub fn new(store: &'a mut WidgetStore, messages: &'a mut Vec<M>, path: WidgetPath) -> Self {
         Self {
             store,
             messages,
@@ -176,7 +315,7 @@ impl<'a, M> EventCtx<'a, M> {
     }
 
     /// The current widget path in the tree.
-    pub fn path(&self) -> &[usize] {
+    pub fn path(&self) -> &WidgetPath {
         &self.path
     }
 }
@@ -186,13 +325,13 @@ impl<'a, M> EventCtx<'a, M> {
 // ---------------------------------------------------------------------------
 
 /// Stores widget-internal persistent state (cursor positions, scroll offsets, etc.)
-/// keyed by the widget's path in the tree.
+/// keyed by the widget's [`WidgetPath`] in the tree.
 ///
 /// State survives `view()` rebuilds because the store lives in the [`AppRuntime`],
 /// not inside widget instances.
 #[derive(Default)]
 pub struct WidgetStore {
-    states: HashMap<Vec<usize>, Box<dyn Any + Send + Sync>>,
+    states: HashMap<WidgetPath, Box<dyn Any + Send + Sync>>,
 }
 
 impl WidgetStore {
@@ -201,14 +340,14 @@ impl WidgetStore {
     }
 
     /// Read state for the given path. Returns `None` if no state is stored.
-    pub fn get<T: 'static>(&self, path: &[usize]) -> Option<&T> {
+    pub fn get<T: 'static>(&self, path: &WidgetPath) -> Option<&T> {
         self.states.get(path)?.downcast_ref()
     }
 
     /// Get or insert a default state for the given path.
     pub fn get_or_default<T: Default + Send + Sync + 'static>(
         &mut self,
-        path: Vec<usize>,
+        path: WidgetPath,
     ) -> &mut T {
         self.states
             .entry(path)
@@ -220,18 +359,18 @@ impl WidgetStore {
     /// Apply a function to all states of type T. Used for frame-level resets.
     pub fn for_each_state_mut<T: 'static, F>(&mut self, mut f: F)
     where
-        F: FnMut(&[usize], &mut T),
+        F: FnMut(&WidgetPath, &mut T),
     {
         for (path, state) in self.states.iter_mut() {
             if let Some(s) = state.downcast_mut::<T>() {
-                f(path.as_slice(), s);
+                f(path, s);
             }
         }
     }
 
     /// Remove entries whose paths are not in the active set.
     /// Called after building the widget tree to clean up stale state.
-    pub fn retain_active(&mut self, active_paths: &HashSet<Vec<usize>>) {
+    pub fn retain_active(&mut self, active_paths: &HashSet<WidgetPath>) {
         self.states.retain(|path, _| active_paths.contains(path));
     }
 }

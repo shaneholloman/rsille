@@ -8,7 +8,9 @@ pub use crate::layout::{
     GridTrack, JustifyContent,
 };
 pub use crate::style::{BorderStyle, Color, Padding, Style, ThemeManager};
-pub use crate::widget::{EventCtx, IntoWidget, RenderCtx, Widget, WidgetStore};
+pub use crate::widget::{
+    EventCtx, IntoWidget, RenderCtx, Widget, WidgetKey, WidgetPath, WidgetStore,
+};
 pub use crate::widgets::{
     button, divider, label, spacer, text_input, Button, ButtonVariant, Divider, DividerDirection,
     DividerTextPosition, DividerVariant, Label, Spacer, TextInput, TextInputVariant,

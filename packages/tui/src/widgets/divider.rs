@@ -52,6 +52,7 @@ pub struct Divider<M = ()> {
     text_position: DividerTextPosition,
     text_spacing: u16,
     constraints: Constraints,
+    widget_key: Option<String>,
     _phantom: std::marker::PhantomData<M>,
 }
 
@@ -65,8 +66,14 @@ impl<M> Divider<M> {
             text_position: DividerTextPosition::default(),
             text_spacing: 1,
             constraints: Constraints::content(),
+            widget_key: None,
             _phantom: std::marker::PhantomData,
         }
+    }
+
+    pub fn key(mut self, name: impl Into<String>) -> Self {
+        self.widget_key = Some(name.into());
+        self
     }
 
     pub fn horizontal(mut self) -> Self {
@@ -249,6 +256,10 @@ impl<M: Send + Sync> Widget<M> for Divider<M> {
                 flex: None,
             },
         }
+    }
+
+    fn key(&self) -> Option<&str> {
+        self.widget_key.as_deref()
     }
 }
 

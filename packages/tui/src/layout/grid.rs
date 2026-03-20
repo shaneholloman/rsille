@@ -9,7 +9,7 @@ use super::taffy_bridge::TaffyBridge;
 use crate::event::Event;
 use crate::layout::Constraints;
 use crate::style::{BorderStyle, Padding, Style};
-use crate::widget::{EventCtx, IntoWidget, RenderCtx, Widget};
+use crate::widget::{EventCtx, IntoWidget, RenderCtx, Widget, WidgetKey};
 use taffy::style::{AlignItems, JustifyItems};
 
 /// Grid layout widget that arranges children in a 2D grid.
@@ -28,6 +28,7 @@ pub struct Grid<M = ()> {
     style: Style,
     align_items: Option<AlignItems>,
     justify_items: Option<JustifyItems>,
+    widget_key: Option<String>,
 }
 
 impl<M> std::fmt::Debug for Grid<M> {
@@ -59,6 +60,7 @@ impl<M> Grid<M> {
             style: Style::default(),
             align_items: None,
             justify_items: None,
+            widget_key: None,
         }
     }
 
@@ -119,6 +121,11 @@ impl<M> Grid<M> {
 
     pub fn justify_items(mut self, justify: JustifyItems) -> Self {
         self.justify_items = Some(justify);
+        self
+    }
+
+    pub fn key(mut self, name: impl Into<String>) -> Self {
+        self.widget_key = Some(name.into());
         self
     }
 
@@ -272,7 +279,7 @@ impl<M: Send + Sync> Widget<M> for Grid<M> {
             }
 
             if let Ok(mut child_chunk) = chunk.from_area(*child_area) {
-                let child_ctx = ctx.child_ctx(index);
+                let child_ctx = ctx.child_ctx(WidgetKey::for_child(index, child.as_ref()));
                 child.render(&mut child_chunk, &child_ctx);
             }
         }
@@ -294,6 +301,10 @@ impl<M: Send + Sync> Widget<M> for Grid<M> {
 
     fn children(&self) -> &[Box<dyn Widget<M>>] {
         &self.children
+    }
+
+    fn key(&self) -> Option<&str> {
+        self.widget_key.as_deref()
     }
 }
 

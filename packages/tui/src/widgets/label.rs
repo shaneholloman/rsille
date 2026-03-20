@@ -10,6 +10,7 @@ use crate::widget::{EventCtx, RenderCtx, Widget};
 pub struct Label<M = ()> {
     content: String,
     style: Style,
+    widget_key: Option<String>,
     _phantom: std::marker::PhantomData<M>,
 }
 
@@ -18,8 +19,14 @@ impl<M> Label<M> {
         Self {
             content: content.into(),
             style: Style::default(),
+            widget_key: None,
             _phantom: std::marker::PhantomData,
         }
+    }
+
+    pub fn key(mut self, name: impl Into<String>) -> Self {
+        self.widget_key = Some(name.into());
+        self
     }
 
     pub fn style(mut self, style: Style) -> Self {
@@ -81,6 +88,10 @@ impl<M: Send + Sync> Widget<M> for Label<M> {
             max_height: Some(height),
             flex: None,
         }
+    }
+
+    fn key(&self) -> Option<&str> {
+        self.widget_key.as_deref()
     }
 }
 

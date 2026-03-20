@@ -53,6 +53,7 @@ pub struct TextInput<M = ()> {
     custom_focus_style: Option<Style>,
     on_change: Option<Arc<dyn Fn(String) -> M + Send + Sync>>,
     on_submit: Option<Arc<dyn Fn(String) -> M + Send + Sync>>,
+    widget_key: Option<String>,
 }
 
 impl<M> std::fmt::Debug for TextInput<M> {
@@ -79,7 +80,13 @@ impl<M> TextInput<M> {
             custom_focus_style: None,
             on_change: None,
             on_submit: None,
+            widget_key: None,
         }
+    }
+
+    pub fn key(mut self, name: impl Into<String>) -> Self {
+        self.widget_key = Some(name.into());
+        self
     }
 
     pub fn variant(mut self, variant: TextInputVariant) -> Self {
@@ -418,6 +425,10 @@ impl<M: Send + Sync + 'static> Widget<M> for TextInput<M> {
 
     fn focusable(&self) -> bool {
         !self.disabled
+    }
+
+    fn key(&self) -> Option<&str> {
+        self.widget_key.as_deref()
     }
 }
 

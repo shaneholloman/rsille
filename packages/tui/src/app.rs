@@ -8,7 +8,7 @@ use render::{Draw, DrawErr, Update};
 
 use crate::event::{KeyCode, KeyEvent, KeyModifiers};
 use crate::focus::FocusManager;
-use crate::widget::{EventCtx, RenderCtx, Widget, WidgetStore};
+use crate::widget::{EventCtx, RenderCtx, Widget, WidgetKey, WidgetStore};
 use crate::widgets::text_input::TextInputState;
 use crate::WidgetResult;
 
@@ -301,14 +301,23 @@ where
 
             // 4. Route to focused widget
             if let Some(focus_path) = self.focus.current_path() {
-                let focus_path = focus_path.to_vec();
+                let focus_path = focus_path.clone();
                 // Navigate tree to the focused widget
                 let mut widget: &dyn Widget<M> = tree.as_ref();
                 let mut valid = true;
-                for &idx in &focus_path {
+                for key in focus_path.as_slice() {
                     let children = widget.children();
-                    if let Some(child) = children.get(idx) {
-                        widget = child.as_ref();
+                    let found = match key {
+                        WidgetKey::Index(idx) => {
+                            children.get(*idx).map(|c| c.as_ref())
+                        }
+                        WidgetKey::Named(name) => children
+                            .iter()
+                            .find(|c| c.key() == Some(name.as_str()))
+                            .map(|c| c.as_ref()),
+                    };
+                    if let Some(child) = found {
+                        widget = child;
                     } else {
                         valid = false;
                         break;
