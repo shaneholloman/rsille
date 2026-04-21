@@ -10,6 +10,9 @@ pub trait Draw {
 /// in every frame, call on_events -> update -> required_size -> Render.render(draw)
 pub trait Update {
     fn on_events(&mut self, events: &[crossterm::event::Event]) -> Result<(), DrawErr>;
+    /// Advance application state.
+    ///
+    /// Return `true` when the new state should be rendered, `false` when no redraw is needed.
     fn update(&mut self) -> Result<bool, DrawErr>;
 
     /// Check if the application should quit

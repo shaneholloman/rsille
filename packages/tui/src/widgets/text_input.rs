@@ -314,10 +314,7 @@ impl<M: Send + Sync + 'static> Widget<M> for TextInput<M> {
                     state.cursor_position = state.cursor_position.min(self.value.len());
                 }
 
-                let value: &str = state
-                    .value
-                    .as_deref()
-                    .unwrap_or(self.value.as_str());
+                let value: &str = state.value.as_deref().unwrap_or(self.value.as_str());
                 let value_len = value.len();
 
                 // Clamp cursor to value length

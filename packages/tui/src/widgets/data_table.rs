@@ -635,8 +635,7 @@ impl<M: Send + Sync + 'static> Widget<M> for DataTable<M> {
 
         if moved {
             ctx.set_handled();
-            if let (Some(active_id), Some(handler)) = (next_active_id, self.on_change.as_ref())
-            {
+            if let (Some(active_id), Some(handler)) = (next_active_id, self.on_change.as_ref()) {
                 ctx.emit(handler(active_id));
             }
         }

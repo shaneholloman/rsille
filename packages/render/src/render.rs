@@ -56,7 +56,7 @@ where
         let chunk = Chunk::new(&mut self.buffer, render_size.into())?;
         self.thing.draw(chunk)?;
 
-        if self.clear {
+        if self.clear && self.buffer.previous().is_none() {
             crossterm::queue!(self.out, Clear(ClearType::All))?;
         }
 

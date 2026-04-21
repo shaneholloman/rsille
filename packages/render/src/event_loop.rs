@@ -284,9 +284,13 @@ where
                 if let Err(e) = self.render.on_events(&events) {
                     error!("Error processing events: {}", e);
                 }
-                if let Err(e) = self.render.update() {
-                    error!("Error updating render state: {}", e);
-                }
+                let needs_render = match self.render.update() {
+                    Ok(needs_render) => needs_render,
+                    Err(e) => {
+                        error!("Error updating render state: {}", e);
+                        false
+                    }
+                };
 
                 // Check if application wants to quit
                 if self.render.thing().should_quit() {
@@ -312,7 +316,7 @@ where
                 }
 
                 // Only render if there are pending changes
-                if !events.is_empty() || self.render.has_pending_changes() {
+                if !events.is_empty() || needs_render || self.render.has_pending_changes() {
                     if let Err(e) = self.render.render() {
                         error!("Error rendering: {}", e);
                     }

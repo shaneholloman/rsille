@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use crossterm::event::Event;
 use render::area::Size;
@@ -15,6 +16,18 @@ use crate::widgets::text_input::TextInputState;
 use crate::WidgetResult;
 
 pub type EventHandler<M> = Arc<dyn Fn() -> M + Send + Sync>;
+
+#[derive(Clone)]
+struct TickConfig<M> {
+    interval: Duration,
+    handler: EventHandler<M>,
+}
+
+struct TickRuntime<M> {
+    interval: Duration,
+    next_fire_at: Instant,
+    handler: EventHandler<M>,
+}
 
 /// Quit key configuration for the application.
 #[derive(Debug, Clone, Default)]
@@ -38,6 +51,7 @@ pub enum QuitBehavior {
 pub struct App<State, M = ()> {
     state: State,
     global_key_handlers: HashMap<KeyCode, EventHandler<M>>,
+    tick_handlers: Vec<TickConfig<M>>,
     quit_behavior: QuitBehavior,
 }
 
@@ -55,6 +69,7 @@ impl<State, M: Clone + std::fmt::Debug + Send + Sync + 'static> App<State, M> {
         Self {
             state,
             global_key_handlers: HashMap::new(),
+            tick_handlers: Vec::new(),
             quit_behavior: QuitBehavior::default(),
         }
     }
@@ -65,6 +80,26 @@ impl<State, M: Clone + std::fmt::Debug + Send + Sync + 'static> App<State, M> {
         F: Fn() -> M + Send + Sync + 'static,
     {
         self.global_key_handlers.insert(key, Arc::new(handler));
+        self
+    }
+
+    /// Register a periodic timer that emits a message at the given interval.
+    ///
+    /// Missed ticks are coalesced into a single message, so a busy frame does
+    /// not cause a backlog of timer messages.
+    pub fn on_tick<F>(mut self, interval: Duration, handler: F) -> Self
+    where
+        F: Fn() -> M + Send + Sync + 'static,
+    {
+        let interval = if interval.is_zero() {
+            Duration::from_millis(1)
+        } else {
+            interval
+        };
+        self.tick_handlers.push(TickConfig {
+            interval,
+            handler: Arc::new(handler),
+        });
         self
     }
 
@@ -147,6 +182,15 @@ impl<State, M: Clone + std::fmt::Debug + Send + Sync + 'static> App<State, M> {
             should_quit: false,
             quit_behavior: self.quit_behavior,
             global_key_handlers: global_handlers,
+            tick_handlers: self
+                .tick_handlers
+                .into_iter()
+                .map(|tick| TickRuntime {
+                    interval: tick.interval,
+                    next_fire_at: Instant::now() + tick.interval,
+                    handler: tick.handler,
+                })
+                .collect(),
             inline_mode,
             inline_max_height,
         };
@@ -198,6 +242,7 @@ struct AppRuntime<State, F, V, M> {
     should_quit: bool,
     quit_behavior: QuitBehavior,
     global_key_handlers: HashMap<KeyCode, Box<dyn Fn() -> M + Send + Sync>>,
+    tick_handlers: Vec<TickRuntime<M>>,
     inline_mode: bool,
     inline_max_height: u16,
 }
@@ -353,6 +398,30 @@ impl<State, F, V, M> AppRuntime<State, F, V, M> {
 
         handled
     }
+
+    fn queue_tick_messages(&mut self) -> bool {
+        if self.tick_handlers.is_empty() {
+            return false;
+        }
+
+        let now = Instant::now();
+        let mut fired = false;
+
+        for tick in &mut self.tick_handlers {
+            if now < tick.next_fire_at {
+                continue;
+            }
+
+            self.messages.push((tick.handler)());
+            fired = true;
+
+            while tick.next_fire_at <= now {
+                tick.next_fire_at += tick.interval;
+            }
+        }
+
+        fired
+    }
 }
 
 impl<State, F, V, M> Draw for AppRuntime<State, F, V, M>
@@ -462,6 +531,8 @@ where
     }
 
     fn update(&mut self) -> Result<bool, DrawErr> {
+        self.queue_tick_messages();
+
         let had_messages = !self.messages.is_empty();
         for msg in self.messages.drain(..) {
             (self.update_fn)(&mut self.state, msg);
@@ -472,8 +543,7 @@ where
             self.cached_tree = None;
         }
 
-        // Always return true to keep the render loop running
-        Ok(true)
+        Ok(had_messages)
     }
 
     fn should_quit(&self) -> bool {
