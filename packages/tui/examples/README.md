@@ -5,6 +5,7 @@ Examples are grouped by intent so the directory stays navigable as the set grows
 ## Categories
 
 - `basics/`: minimal starting points and first-run examples
+- `themes/`: theme and styling system demos
 - `layout/`: composition and layout primitives
 - `widgets/`: focused widget behavior demos
 - `scenes/`: richer animated or visual showcase examples
@@ -15,6 +16,7 @@ Example commands stay flat even though files are grouped in subdirectories:
 
 ```bash
 cargo run -p tui --example hello
+cargo run -p tui --example theme
 cargo run -p tui --example tree
 cargo run -p tui --example flame
 ```

@@ -17,6 +17,7 @@ use crate::WidgetResult;
 
 pub type EventHandler<M> = Box<dyn Fn() -> M>;
 pub type FrameHandler<M> = Box<dyn Fn(FrameInfo) -> M>;
+pub type ThemeResolver<State> = Box<dyn Fn(&State) -> Theme>;
 
 struct TickConfig<M> {
     interval: Duration,
@@ -99,6 +100,7 @@ pub enum QuitBehavior {
 pub struct App<State, M = ()> {
     state: State,
     theme: Theme,
+    theme_resolver: Option<ThemeResolver<State>>,
     global_key_handlers: HashMap<KeyCode, EventHandler<M>>,
     tick_handlers: Vec<TickConfig<M>>,
     frame_handlers: Vec<FrameConfig<M>>,
@@ -119,6 +121,7 @@ impl<State, M: Clone + std::fmt::Debug + 'static> App<State, M> {
         Self {
             state,
             theme: Theme::dark(),
+            theme_resolver: None,
             global_key_handlers: HashMap::new(),
             tick_handlers: Vec::new(),
             frame_handlers: Vec::new(),
@@ -129,6 +132,16 @@ impl<State, M: Clone + std::fmt::Debug + 'static> App<State, M> {
     /// Configure the theme used for rendering.
     pub fn with_theme(mut self, theme: Theme) -> Self {
         self.theme = theme;
+        self.theme_resolver = None;
+        self
+    }
+
+    /// Resolve the theme from application state before each render.
+    pub fn with_theme_from<F>(mut self, resolver: F) -> Self
+    where
+        F: Fn(&State) -> Theme + 'static,
+    {
+        self.theme_resolver = Some(Box::new(resolver));
         self
     }
 
@@ -234,6 +247,7 @@ impl<State, M: Clone + std::fmt::Debug + 'static> App<State, M> {
         let App {
             state,
             theme,
+            theme_resolver,
             global_key_handlers,
             tick_handlers,
             frame_handlers,
@@ -243,6 +257,7 @@ impl<State, M: Clone + std::fmt::Debug + 'static> App<State, M> {
         let runtime = AppRuntime {
             state,
             theme,
+            theme_resolver,
             update_fn: update,
             view_fn: view,
             store: WidgetStore::new(),
@@ -308,6 +323,7 @@ impl<State, M: Clone + std::fmt::Debug + 'static> App<State, M> {
 struct AppRuntime<State, F, V, M> {
     state: State,
     theme: Theme,
+    theme_resolver: Option<ThemeResolver<State>>,
     update_fn: F,
     view_fn: V,
     store: WidgetStore,
@@ -335,6 +351,12 @@ impl<State, F, V, M> AppRuntime<State, F, V, M> {
             self.store
                 .retain_active(|path| self.focus.live_paths().contains(path));
             self.cached_tree = Some(tree);
+        }
+    }
+
+    fn sync_theme(&mut self) {
+        if let Some(resolver) = self.theme_resolver.as_ref() {
+            self.theme = resolver(&self.state);
         }
     }
 
@@ -522,6 +544,8 @@ where
 {
     fn draw(&mut self, mut chunk: Chunk) -> Result<Size, DrawErr> {
         let size = chunk.area().size();
+
+        self.sync_theme();
 
         // Rebuild widget tree from current state
         let tree = (self.view_fn)(&self.state);
