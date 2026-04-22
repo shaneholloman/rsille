@@ -1,7 +1,5 @@
 use std::{
     io::{stdout, Stdout},
-    sync::mpsc,
-    thread,
     time::{Duration, Instant},
 };
 
@@ -11,8 +9,9 @@ use crossterm::{
     execute,
     terminal::{Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen},
 };
-use futures::StreamExt;
+use futures::{FutureExt, StreamExt};
 use log::{error, info, warn};
+use tokio::time::Instant as TokioInstant;
 
 use crate::{Builder, DrawErr, DrawUpdate, Render};
 
@@ -199,123 +198,131 @@ where
             }
         }
 
-        let (event_tx, event_rx) = mpsc::channel();
-        let (stop_tx, stop_rx) = mpsc::channel();
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(DrawErr::RuntimeCreation)?;
 
-        let event_thread = self.make_event_thread(event_tx, stop_tx);
-        let render_thread = self.make_render_thread(event_rx, stop_rx);
-
-        event_thread.join().map_err(DrawErr::thread_panic)?;
-        render_thread.join().map_err(DrawErr::thread_panic)?;
+        rt.block_on(self.run_async())?;
 
         info!(target: "render::event_loop", "event loop stopped");
 
         Ok(())
     }
 
-    fn make_event_thread(
-        &self,
-        event_tx: mpsc::Sender<Event>,
-        stop_tx: mpsc::Sender<()>,
-    ) -> thread::JoinHandle<()> {
-        let exit_code = self.exit_code;
-        thread::spawn(move || event_thread(event_tx, stop_tx, exit_code))
-    }
-
-    fn make_render_thread(
-        mut self,
-        event_rx: mpsc::Receiver<Event>,
-        stop_rx: mpsc::Receiver<()>,
-    ) -> thread::JoinHandle<()> {
+    async fn run_async(mut self) -> Result<(), DrawErr> {
         let frame_interval = self
             .frame_limit
             .filter(|fps| *fps > 0)
             .map(|fps| Duration::from_secs_f64(1.0 / fps as f64));
-        let max_event_per_frame = self.max_event_per_frame;
+        let mut pending_initial_frame = true;
+        let mut next_frame_at = Instant::now();
+        let mut reader = EventStream::new();
 
-        thread::spawn(move || {
-            let mut pending_initial_frame = true;
-            let mut next_frame_at = Instant::now();
+        loop {
+            let mut stop_after_iteration = false;
+            let mut events = Vec::new();
 
-            loop {
-                if stop_rx.try_recv().is_ok() {
-                    break;
-                }
-
-                let mut events = Vec::new();
-                match wait_for_frame_or_event(
-                    &event_rx,
-                    frame_interval,
-                    next_frame_at,
-                    pending_initial_frame,
-                ) {
-                    WaitOutcome::Event(event) => events.push(event),
-                    WaitOutcome::Timeout => {}
-                    WaitOutcome::Disconnected => {
-                        if stop_rx.try_recv().is_err() {
-                            warn!("Event channel closed, stopping render thread");
-                        }
-                        break;
-                    }
-                }
-
-                drain_pending_events(&event_rx, &mut events, max_event_per_frame);
-
-                pending_initial_frame = false;
-                let frame_started_at = Instant::now();
-
-                for event in &events {
-                    if let Event::Resize(width, height) = event {
-                        self.render.resize((*width, *height).into());
-                    }
-                }
-
-                if let Err(e) = self.render.on_events(&events) {
-                    error!("Error processing events: {}", e);
-                }
-                let needs_render = match self.render.update() {
-                    Ok(needs_render) => needs_render,
-                    Err(e) => {
-                        error!("Error updating render state: {}", e);
-                        false
-                    }
-                };
-
-                if self.render.thing().should_quit() {
+            match wait_for_frame_or_event(
+                &mut reader,
+                self.exit_code,
+                frame_interval,
+                next_frame_at,
+                pending_initial_frame,
+            )
+            .await
+            {
+                WaitOutcome::Event(event) => events.push(event),
+                WaitOutcome::Timeout => {}
+                WaitOutcome::ExitRequested => {
                     info!(
                         target: "render::event_loop",
-                        "Application requested quit"
+                        "Automatic exit key pressed"
                     );
                     break;
                 }
+                WaitOutcome::Disconnected => break,
+            }
 
-                let current_size = self.render.size();
-                if let Some(new_size) = self.render.thing().required_size(current_size) {
-                    if self.inline_mode {
-                        self.render.set_used_height(new_size.height);
-                    } else {
-                        self.render.resize(new_size);
-                    }
+            match drain_pending_events(
+                &mut reader,
+                self.exit_code,
+                &mut events,
+                self.max_event_per_frame,
+            ) {
+                DrainOutcome::Continue => {}
+                DrainOutcome::ExitRequested => {
+                    info!(
+                        target: "render::event_loop",
+                        "Automatic exit key pressed"
+                    );
+                    stop_after_iteration = true;
                 }
-
-                if !events.is_empty() || needs_render || self.render.has_pending_changes() {
-                    if let Err(e) = self.render.render() {
-                        error!("Error rendering: {}", e);
-                    }
-                }
-
-                if let Some(interval) = frame_interval {
-                    if next_frame_at <= frame_started_at {
-                        next_frame_at = frame_started_at + interval;
-                    }
-
-                    let finished_at = Instant::now();
-                    while next_frame_at <= finished_at {
-                        next_frame_at += interval;
-                    }
+                DrainOutcome::Disconnected => {
+                    stop_after_iteration = true;
                 }
             }
-        })
+
+            pending_initial_frame = false;
+            let frame_started_at = Instant::now();
+
+            for event in &events {
+                if let Event::Resize(width, height) = event {
+                    self.render.resize((*width, *height).into());
+                }
+            }
+
+            if let Err(e) = self.render.on_events(&events) {
+                error!("Error processing events: {}", e);
+            }
+            let needs_render = match self.render.update() {
+                Ok(needs_render) => needs_render,
+                Err(e) => {
+                    error!("Error updating render state: {}", e);
+                    false
+                }
+            };
+
+            if self.render.thing().should_quit() {
+                info!(
+                    target: "render::event_loop",
+                    "Application requested quit"
+                );
+                break;
+            }
+
+            let current_size = self.render.size();
+            if let Some(new_size) = self.render.thing().required_size(current_size) {
+                if self.inline_mode {
+                    self.render.set_used_height(new_size.height);
+                } else {
+                    self.render.resize(new_size);
+                }
+            }
+
+            if !events.is_empty() || needs_render || self.render.has_pending_changes() {
+                if let Err(e) = self.render.render() {
+                    error!("Error rendering: {}", e);
+                }
+            }
+
+            if stop_after_iteration {
+                break;
+            }
+
+            if let Some(interval) = frame_interval {
+                if next_frame_at <= frame_started_at {
+                    next_frame_at = frame_started_at + interval;
+                }
+
+                let finished_at = Instant::now();
+                while next_frame_at <= finished_at {
+                    next_frame_at += interval;
+                }
+            }
+        }
+
+        Ok(())
     }
 }
 
@@ -323,10 +330,18 @@ enum WaitOutcome {
     Event(Event),
     Timeout,
     Disconnected,
+    ExitRequested,
 }
 
-fn wait_for_frame_or_event(
-    event_rx: &mpsc::Receiver<Event>,
+enum DrainOutcome {
+    Continue,
+    Disconnected,
+    ExitRequested,
+}
+
+async fn wait_for_frame_or_event(
+    reader: &mut EventStream,
+    exit_code: Option<KeyEvent>,
     frame_interval: Option<Duration>,
     next_frame_at: Instant,
     pending_initial_frame: bool,
@@ -335,79 +350,84 @@ fn wait_for_frame_or_event(
         return WaitOutcome::Timeout;
     }
 
-    if frame_interval.is_some() {
-        match event_rx.recv_timeout(next_frame_at.saturating_duration_since(Instant::now())) {
-            Ok(event) => WaitOutcome::Event(event),
-            Err(mpsc::RecvTimeoutError::Timeout) => WaitOutcome::Timeout,
-            Err(mpsc::RecvTimeoutError::Disconnected) => WaitOutcome::Disconnected,
-        }
-    } else {
-        match event_rx.recv() {
-            Ok(event) => WaitOutcome::Event(event),
-            Err(_) => WaitOutcome::Disconnected,
-        }
-    }
-}
+    loop {
+        if frame_interval.is_some() {
+            let event = reader.next();
+            tokio::pin!(event);
 
-fn drain_pending_events(
-    event_rx: &mpsc::Receiver<Event>,
-    events: &mut Vec<Event>,
-    max_event_per_frame: usize,
-) {
-    while events.len() < max_event_per_frame {
-        match event_rx.try_recv() {
-            Ok(event) => events.push(event),
-            Err(mpsc::TryRecvError::Empty) => break,
-            Err(mpsc::TryRecvError::Disconnected) => break,
-        }
-    }
-}
+            let sleep = tokio::time::sleep_until(TokioInstant::from_std(next_frame_at));
+            tokio::pin!(sleep);
 
-fn event_thread(
-    event_tx: mpsc::Sender<Event>,
-    stop_tx: mpsc::Sender<()>,
-    exit_code: Option<KeyEvent>,
-) {
-    let rt = match tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-    {
-        Ok(rt) => rt,
-        Err(e) => {
-            error!("Failed to create tokio runtime: {}", e);
-            let _ = stop_tx.send(());
-            return;
-        }
-    };
-
-    rt.block_on(async move {
-        let mut reader = EventStream::new();
-
-        loop {
+            match tokio::select! {
+                maybe_event = &mut event => Some(maybe_event),
+                _ = &mut sleep => None,
+            } {
+                Some(Some(Ok(event))) => {
+                    if is_exit_event(&event, exit_code) {
+                        return WaitOutcome::ExitRequested;
+                    }
+                    return WaitOutcome::Event(event);
+                }
+                Some(Some(Err(e))) => {
+                    error!("Error reading event: {}", e);
+                }
+                Some(None) => {
+                    warn!("Event stream ended");
+                    return WaitOutcome::Disconnected;
+                }
+                None => return WaitOutcome::Timeout,
+            }
+        } else {
             match reader.next().await {
                 Some(Ok(event)) => {
-                    if let Some(exit_key) = exit_code {
-                        if let Event::Key(key_event) = event {
-                            if key_event == exit_key {
-                                let _ = stop_tx.send(());
-                                break;
-                            }
-                        }
+                    if is_exit_event(&event, exit_code) {
+                        return WaitOutcome::ExitRequested;
                     }
-
-                    if event_tx.send(event).is_err() {
-                        break;
-                    }
+                    return WaitOutcome::Event(event);
                 }
                 Some(Err(e)) => {
                     error!("Error reading event: {}", e);
                 }
                 None => {
                     warn!("Event stream ended");
-                    let _ = stop_tx.send(());
-                    break;
+                    return WaitOutcome::Disconnected;
                 }
             }
         }
-    });
+    }
+}
+
+fn drain_pending_events(
+    reader: &mut EventStream,
+    exit_code: Option<KeyEvent>,
+    events: &mut Vec<Event>,
+    max_event_per_frame: usize,
+) -> DrainOutcome {
+    while events.len() < max_event_per_frame {
+        match reader.next().now_or_never() {
+            Some(Some(Ok(event))) => {
+                if is_exit_event(&event, exit_code) {
+                    return DrainOutcome::ExitRequested;
+                }
+                events.push(event);
+            }
+            Some(Some(Err(e))) => {
+                error!("Error reading event: {}", e);
+            }
+            Some(None) => {
+                warn!("Event stream ended");
+                return DrainOutcome::Disconnected;
+            }
+            None => break,
+        }
+    }
+
+    DrainOutcome::Continue
+}
+
+fn is_exit_event(event: &Event, exit_code: Option<KeyEvent>) -> bool {
+    matches!(
+        (event, exit_code),
+        (Event::Key(key_event), Some(exit_key)) if *key_event == exit_key
+    )
 }
