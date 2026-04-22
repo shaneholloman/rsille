@@ -174,9 +174,13 @@ impl<M> Widget<M> for Flex<M> {
             return;
         }
 
-        let theme_style = ctx.theme().styles.surface;
-        let final_style = self.style.merge(theme_style);
-        let render_style = final_style.to_render_style();
+        let surface_style = self.style.merge(ctx.theme().styles.surface);
+        let border_style = self
+            .style
+            .merge(ctx.theme().styles.border.merge(ctx.theme().styles.surface));
+        let render_style = surface_style.to_render_style();
+        let border_render_style = border_style.to_render_style();
+        let should_fill_background = ctx.path().is_empty() || self.style.bg_color.is_some();
 
         let border_area = if self.border.is_some() {
             if area.width() < 2 || area.height() < 2 {
@@ -190,12 +194,12 @@ impl<M> Widget<M> for Flex<M> {
             area
         };
 
-        if final_style.bg_color.is_some() {
+        if should_fill_background {
             render_background(chunk, render_style);
         }
 
         if let Some(border) = self.border {
-            render_border(chunk, border, render_style);
+            render_border(chunk, border, border_render_style);
         }
 
         let inner = border_area.shrink_saturating(

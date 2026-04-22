@@ -2,73 +2,48 @@
 
 use super::{Color, Style};
 
-/// Semantic color definitions for a theme
-#[derive(Debug, Clone)]
-pub struct ThemeColors {
-    /// Primary accent color
-    pub primary: Color,
-    /// Secondary accent color
-    pub secondary: Color,
-    /// Success state color (typically green)
-    pub success: Color,
-    /// Danger/error state color (typically red)
-    pub danger: Color,
-    /// Warning state color (typically yellow/orange)
-    pub warning: Color,
-    /// Info state color (typically blue/cyan)
-    pub info: Color,
-    /// Main text color
-    pub text: Color,
-    /// Muted/secondary text color
-    pub text_muted: Color,
-    /// Main background color
-    pub background: Color,
-    /// Surface/card background color
-    pub surface: Color,
-    /// Border color
-    pub border: Color,
-    /// Focus ring color (for borders and outlines when focused)
-    pub focus_ring: Color,
-    /// Focus background highlight color (subtle background change when focused)
-    pub focus_background: Color,
+#[derive(Debug, Clone, Copy)]
+struct Palette {
+    primary: Color,
+    secondary: Color,
+    danger: Color,
+    text: Color,
+    text_muted: Color,
+    background: Color,
+    surface: Color,
+    border: Color,
+    focus_ring: Color,
+    focus_background: Color,
 }
 
-impl ThemeColors {
-    /// Create a dark theme color palette
-    pub fn dark() -> Self {
+impl Palette {
+    fn dark() -> Self {
         Self {
-            primary: Color::Rgb(99, 102, 241),         // Indigo
-            secondary: Color::Rgb(139, 92, 246),       // Purple
-            success: Color::Rgb(34, 197, 94),          // Green
-            danger: Color::Rgb(239, 68, 68),           // Red
-            warning: Color::Rgb(251, 146, 60),         // Orange
-            info: Color::Rgb(59, 130, 246),            // Blue
-            text: Color::Rgb(229, 229, 231),           // Zinc-200
-            text_muted: Color::Rgb(161, 161, 170),     // Zinc-400
-            background: Color::Rgb(24, 24, 27),        // Zinc-900
-            surface: Color::Rgb(39, 39, 42),           // Zinc-800
-            border: Color::Rgb(63, 63, 70),            // Zinc-700
-            focus_ring: Color::Rgb(129, 140, 248),     // Lighter indigo for focus (Indigo-400)
-            focus_background: Color::Rgb(49, 46, 129), // Dark indigo background (Indigo-950)
+            primary: Color::Rgb(99, 102, 241),
+            secondary: Color::Rgb(139, 92, 246),
+            danger: Color::Rgb(239, 68, 68),
+            text: Color::Rgb(229, 229, 231),
+            text_muted: Color::Rgb(161, 161, 170),
+            background: Color::Rgb(24, 24, 27),
+            surface: Color::Rgb(39, 39, 42),
+            border: Color::Rgb(63, 63, 70),
+            focus_ring: Color::Rgb(129, 140, 248),
+            focus_background: Color::Rgb(49, 46, 129),
         }
     }
 
-    /// Create a light theme color palette
-    pub fn light() -> Self {
+    fn light() -> Self {
         Self {
-            primary: Color::Rgb(79, 70, 229),            // Indigo
-            secondary: Color::Rgb(124, 58, 237),         // Purple
-            success: Color::Rgb(22, 163, 74),            // Green
-            danger: Color::Rgb(220, 38, 38),             // Red
-            warning: Color::Rgb(234, 88, 12),            // Orange
-            info: Color::Rgb(37, 99, 235),               // Blue
-            text: Color::Rgb(24, 24, 27),                // Zinc-900
-            text_muted: Color::Rgb(113, 113, 122),       // Zinc-500
-            background: Color::Rgb(250, 250, 250),       // Zinc-50
-            surface: Color::Rgb(255, 255, 255),          // White
-            border: Color::Rgb(212, 212, 216),           // Zinc-300
-            focus_ring: Color::Rgb(67, 56, 202),         // Darker indigo for focus (Indigo-700)
-            focus_background: Color::Rgb(224, 231, 255), // Light indigo background (Indigo-100)
+            primary: Color::Rgb(79, 70, 229),
+            secondary: Color::Rgb(124, 58, 237),
+            danger: Color::Rgb(220, 38, 38),
+            text: Color::Rgb(24, 24, 27),
+            text_muted: Color::Rgb(113, 113, 122),
+            background: Color::Rgb(250, 250, 250),
+            surface: Color::Rgb(255, 255, 255),
+            border: Color::Rgb(212, 212, 216),
+            focus_ring: Color::Rgb(67, 56, 202),
+            focus_background: Color::Rgb(224, 231, 255),
         }
     }
 }
@@ -94,6 +69,12 @@ pub struct ThemeStyles {
     pub secondary_action_hover: Style,
     /// Secondary action focused state
     pub secondary_action_focused: Style,
+    /// Destructive action style (e.g., dangerous buttons)
+    pub destructive_action: Style,
+    /// Destructive action hover state
+    pub destructive_action_hover: Style,
+    /// Destructive action focused state
+    pub destructive_action_focused: Style,
 
     // === Interactive Element Styles ===
     /// Interactive element style (e.g., inputs, checkboxes, sliders)
@@ -108,6 +89,8 @@ pub struct ThemeStyles {
     pub text: Style,
     /// Muted/secondary text style
     pub text_muted: Style,
+    /// Placeholder text style
+    pub text_placeholder: Style,
     /// Heading text style
     pub text_heading: Style,
 
@@ -116,84 +99,88 @@ pub struct ThemeStyles {
     pub surface: Style,
     /// Elevated surface style (e.g., modals, popups, cards)
     pub surface_elevated: Style,
+    /// Header surface style for table/calendar headings
+    pub surface_header: Style,
 
     // === State Styles ===
     /// Selected/highlighted state
     pub selected: Style,
+    /// Selected state while the widget is focused
+    pub selected_focused: Style,
+    /// Active list row when the widget is not focused
+    pub list_active: Style,
+    /// Active list row when the widget is focused
+    pub list_active_focused: Style,
     /// Hover state (generic)
     pub hover: Style,
     /// Disabled state (generic)
     pub disabled: Style,
+    /// Default border style
+    pub border: Style,
+    /// Focused border style
+    pub border_focused: Style,
+    /// Text cursor style
+    pub cursor: Style,
 }
 
 impl ThemeStyles {
     /// Create semantic styles for dark theme
-    pub fn dark(colors: &ThemeColors) -> Self {
-        Self {
-            // Action styles
-            primary_action: Style::default().fg(colors.text).bg(colors.primary),
-            primary_action_hover: Style::default().fg(colors.text).bg(colors.primary).bold(),
-            primary_action_focused: Style::default().fg(colors.text).bg(colors.primary).bold(), // Make focused state visually distinct
-            secondary_action: Style::default().fg(colors.text).bg(colors.secondary),
-            secondary_action_hover: Style::default().fg(colors.text).bg(colors.secondary).bold(),
-            secondary_action_focused: Style::default().fg(colors.text).bg(colors.secondary).bold(), // Make focused state visually distinct
-
-            // Interactive element styles
-            interactive: Style::default().fg(colors.text).bg(colors.surface),
-            interactive_focused: Style::default().fg(colors.text).bg(colors.surface).bold(), // Make focused state visually distinct
-            interactive_disabled: Style::default().fg(colors.text_muted).bg(colors.surface),
-
-            // Text styles
-            text: Style::default().fg(colors.text),
-            text_muted: Style::default().fg(colors.text_muted),
-            text_heading: Style::default().fg(colors.text).bold(),
-
-            // Container styles
-            surface: Style::default().bg(colors.background).fg(colors.text),
-            surface_elevated: Style::default().bg(colors.surface).fg(colors.text),
-
-            // State styles
-            selected: Style::default().fg(colors.text).bg(colors.primary),
-            hover: Style::default().fg(colors.text).bg(colors.primary).bold(),
-            disabled: Style::default().fg(colors.text_muted),
-        }
+    pub fn dark() -> Self {
+        let palette = Palette::dark();
+        Self::from_palette(palette, palette.text)
     }
 
     /// Create semantic styles for light theme
-    pub fn light(colors: &ThemeColors) -> Self {
+    pub fn light() -> Self {
+        let palette = Palette::light();
+        Self::from_palette(palette, Color::White)
+    }
+
+    fn from_palette(palette: Palette, action_fg: Color) -> Self {
         Self {
             // Action styles
-            primary_action: Style::default().fg(Color::White).bg(colors.primary),
-            primary_action_hover: Style::default().fg(Color::White).bg(colors.primary).bold(),
-            primary_action_focused: Style::default().fg(Color::White).bg(colors.primary).bold(), // Make focused state visually distinct
-            secondary_action: Style::default().fg(Color::White).bg(colors.secondary),
-            secondary_action_hover: Style::default()
-                .fg(Color::White)
-                .bg(colors.secondary)
-                .bold(),
-            secondary_action_focused: Style::default()
-                .fg(Color::White)
-                .bg(colors.secondary)
-                .bold(), // Make focused state visually distinct
+            primary_action: Style::default().fg(action_fg).bg(palette.primary),
+            primary_action_hover: Style::default().fg(action_fg).bg(palette.primary).bold(),
+            primary_action_focused: Style::default().fg(action_fg).bg(palette.primary).bold(),
+            secondary_action: Style::default().fg(action_fg).bg(palette.secondary),
+            secondary_action_hover: Style::default().fg(action_fg).bg(palette.secondary).bold(),
+            secondary_action_focused: Style::default().fg(action_fg).bg(palette.secondary).bold(),
+            destructive_action: Style::default().fg(Color::White).bg(palette.danger),
+            destructive_action_hover: Style::default().fg(Color::White).bg(palette.danger).bold(),
+            destructive_action_focused: Style::default().fg(Color::White).bg(palette.danger).bold(),
 
             // Interactive element styles
-            interactive: Style::default().fg(colors.text).bg(colors.surface),
-            interactive_focused: Style::default().fg(colors.text).bg(colors.surface).bold(), // Make focused state visually distinct
-            interactive_disabled: Style::default().fg(colors.text_muted).bg(colors.surface),
+            interactive: Style::default().fg(palette.text).bg(palette.surface),
+            interactive_focused: Style::default().fg(palette.text).bg(palette.surface).bold(),
+            interactive_disabled: Style::default().fg(palette.text_muted).bg(palette.surface),
 
             // Text styles
-            text: Style::default().fg(colors.text),
-            text_muted: Style::default().fg(colors.text_muted),
-            text_heading: Style::default().fg(colors.text).bold(),
+            text: Style::default().fg(palette.text),
+            text_muted: Style::default().fg(palette.text_muted),
+            text_placeholder: Style::default().fg(palette.text_muted),
+            text_heading: Style::default().fg(palette.text).bold(),
 
             // Container styles
-            surface: Style::default().bg(colors.background).fg(colors.text),
-            surface_elevated: Style::default().bg(colors.surface).fg(colors.text),
+            surface: Style::default().bg(palette.background).fg(palette.text),
+            surface_elevated: Style::default().bg(palette.surface).fg(palette.text),
+            surface_header: Style::default().bg(palette.surface).fg(palette.text).bold(),
 
             // State styles
-            selected: Style::default().fg(Color::White).bg(colors.primary),
-            hover: Style::default().fg(Color::White).bg(colors.primary).bold(),
-            disabled: Style::default().fg(colors.text_muted),
+            selected: Style::default().fg(action_fg).bg(palette.primary),
+            selected_focused: Style::default()
+                .fg(palette.text)
+                .bg(palette.focus_background)
+                .bold(),
+            list_active: Style::default()
+                .fg(palette.text)
+                .bg(palette.focus_background)
+                .bold(),
+            list_active_focused: Style::default().fg(palette.text).bg(palette.surface).bold(),
+            hover: Style::default().fg(action_fg).bg(palette.primary).bold(),
+            disabled: Style::default().fg(palette.text_muted),
+            border: Style::default().fg(palette.border),
+            border_focused: Style::default().fg(palette.focus_ring),
+            cursor: Style::default().fg(palette.background).bg(palette.text),
         }
     }
 }
@@ -203,34 +190,27 @@ impl ThemeStyles {
 pub struct Theme {
     /// Theme name
     pub name: String,
-    /// Semantic color palette
-    pub colors: ThemeColors,
     /// Semantic style roles
     pub styles: ThemeStyles,
 }
 
 impl Theme {
-    /// Create a new theme with the given name, colors, and styles
-    pub fn new(name: impl Into<String>, colors: ThemeColors, styles: ThemeStyles) -> Self {
+    /// Create a new theme with the given name and semantic styles
+    pub fn new(name: impl Into<String>, styles: ThemeStyles) -> Self {
         Self {
             name: name.into(),
-            colors,
             styles,
         }
     }
 
     /// Create the built-in dark theme
     pub fn dark() -> Self {
-        let colors = ThemeColors::dark();
-        let styles = ThemeStyles::dark(&colors);
-        Self::new("dark", colors, styles)
+        Self::new("dark", ThemeStyles::dark())
     }
 
     /// Create the built-in light theme
     pub fn light() -> Self {
-        let colors = ThemeColors::light();
-        let styles = ThemeStyles::light(&colors);
-        Self::new("light", colors, styles)
+        Self::new("light", ThemeStyles::light())
     }
 
     /// Create a theme builder for custom themes
@@ -243,7 +223,6 @@ impl Theme {
 #[derive(Debug)]
 pub struct ThemeBuilder {
     name: String,
-    colors: Option<ThemeColors>,
     styles: Option<ThemeStyles>,
 }
 
@@ -252,7 +231,6 @@ impl ThemeBuilder {
     pub fn new() -> Self {
         Self {
             name: "custom".to_string(),
-            colors: None,
             styles: None,
         }
     }
@@ -260,12 +238,6 @@ impl ThemeBuilder {
     /// Set the theme name
     pub fn name(mut self, name: impl Into<String>) -> Self {
         self.name = name.into();
-        self
-    }
-
-    /// Set the color palette
-    pub fn colors(mut self, colors: ThemeColors) -> Self {
-        self.colors = Some(colors);
         self
     }
 
@@ -277,9 +249,8 @@ impl ThemeBuilder {
 
     /// Build the theme, using dark theme defaults for unset fields
     pub fn build(self) -> Theme {
-        let colors = self.colors.unwrap_or_else(ThemeColors::dark);
-        let styles = self.styles.unwrap_or_else(|| ThemeStyles::dark(&colors));
-        Theme::new(self.name, colors, styles)
+        let styles = self.styles.unwrap_or_else(ThemeStyles::dark);
+        Theme::new(self.name, styles)
     }
 }
 
@@ -309,7 +280,7 @@ mod tests {
     fn test_custom_theme_builder() {
         let theme = Theme::builder()
             .name("custom")
-            .colors(ThemeColors::dark())
+            .styles(ThemeStyles::dark())
             .build();
         assert_eq!(theme.name, "custom");
     }

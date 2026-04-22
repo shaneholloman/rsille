@@ -207,7 +207,7 @@ impl<M> Widget<M> for Divider<M> {
             return;
         }
 
-        let theme_style = Style::default().fg(ctx.theme().colors.border);
+        let theme_style = ctx.theme().styles.border;
         let final_style = self.style.merge(theme_style);
         let render_style = final_style.to_render_style();
         let (h_char, v_char) = self.variant.chars();

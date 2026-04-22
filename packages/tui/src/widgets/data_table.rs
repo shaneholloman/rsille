@@ -407,29 +407,19 @@ impl<M: 'static> Widget<M> for DataTable<M> {
             .unwrap_or(base_style)
             .to_render_style();
         let active_style = if is_focused {
-            self.custom_focus_style.unwrap_or_else(|| {
-                Style::default()
-                    .fg(theme.colors.text)
-                    .bg(theme.colors.focus_background)
-                    .bold()
-            })
+            self.custom_focus_style
+                .unwrap_or(theme.styles.selected_focused)
         } else {
             theme.styles.selected
         }
         .to_render_style();
-        let header_style = Style::default()
-            .fg(theme.colors.text)
-            .bg(theme.colors.surface)
-            .bold()
-            .to_render_style();
+        let header_style = theme.styles.surface_header.to_render_style();
         let muted_style = theme.styles.text_muted.to_render_style();
         let disabled_style = theme.styles.interactive_disabled.to_render_style();
         let border_style = if is_focused {
-            Style::default()
-                .fg(theme.colors.focus_ring)
-                .to_render_style()
+            theme.styles.border_focused.to_render_style()
         } else {
-            Style::default().fg(theme.colors.border).to_render_style()
+            theme.styles.border.to_render_style()
         };
 
         let _ = chunk.fill(0, 0, area.width(), area.height(), ' ', row_style);

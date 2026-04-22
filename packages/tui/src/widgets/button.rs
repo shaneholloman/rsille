@@ -3,7 +3,7 @@
 use crate::event::{Event, KeyCode};
 use crate::focus::FocusConfig;
 use crate::layout::Constraints;
-use crate::style::{Color, Style, Theme};
+use crate::style::{Style, Theme};
 use crate::widget::{EventCtx, EventPhase, RenderCtx, Widget};
 
 /// Button style variants.
@@ -96,7 +96,7 @@ impl<M> Button<M> {
                 if is_focused {
                     theme.styles.interactive_focused
                 } else {
-                    Style::default().fg(theme.colors.text)
+                    theme.styles.text
                 }
             }
             ButtonVariant::Link => {
@@ -109,12 +109,9 @@ impl<M> Button<M> {
             }
             ButtonVariant::Destructive => {
                 if is_focused {
-                    Style::default()
-                        .fg(Color::White)
-                        .bg(theme.colors.danger)
-                        .bold()
+                    theme.styles.destructive_action_focused
                 } else {
-                    Style::default().fg(Color::White).bg(theme.colors.danger)
+                    theme.styles.destructive_action
                 }
             }
         }
@@ -147,11 +144,9 @@ impl<M> Widget<M> for Button<M> {
         // Border for Ghost variant
         if matches!(self.variant, ButtonVariant::Ghost) {
             let border_style = if is_focused {
-                Style::default()
-                    .fg(theme.colors.focus_ring)
-                    .to_render_style()
+                theme.styles.border_focused.to_render_style()
             } else {
-                Style::default().fg(theme.colors.border).to_render_style()
+                theme.styles.border.to_render_style()
             };
             use crate::layout::border_renderer;
             use crate::style::BorderStyle;

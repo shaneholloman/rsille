@@ -180,19 +180,12 @@ impl<M: 'static> Widget<M> for TextInput<M> {
 
         // Single theme lookup for all theme-dependent styles
         let border_style = if is_focused {
-            Style::default()
-                .fg(theme.colors.focus_ring)
-                .to_render_style()
+            theme.styles.border_focused.to_render_style()
         } else {
-            Style::default().fg(theme.colors.border).to_render_style()
+            theme.styles.border.to_render_style()
         };
-        let placeholder_style = Style::default()
-            .fg(theme.colors.text_muted)
-            .to_render_style();
-        let cursor_style = Style::default()
-            .fg(theme.colors.background)
-            .bg(theme.colors.text)
-            .to_render_style();
+        let placeholder_style = theme.styles.text_placeholder.to_render_style();
+        let cursor_style = theme.styles.cursor.to_render_style();
 
         match self.variant {
             TextInputVariant::Default | TextInputVariant::Password => {

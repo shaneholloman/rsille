@@ -216,16 +216,22 @@ impl<M> Widget<M> for Grid<M> {
             return;
         }
 
-        let render_style = self.style.to_render_style();
+        let surface_style = self.style.merge(ctx.theme().styles.surface);
+        let border_style = self
+            .style
+            .merge(ctx.theme().styles.border.merge(ctx.theme().styles.surface));
+        let render_style = surface_style.to_render_style();
+        let border_render_style = border_style.to_render_style();
+        let should_fill_background = ctx.path().is_empty() || self.style.bg_color.is_some();
 
         let mut content_area = area;
 
-        if self.style.bg_color.is_some() {
+        if should_fill_background {
             render_background(chunk, render_style);
         }
 
         if let Some(ref border) = self.border {
-            render_border(chunk, *border, render_style);
+            render_border(chunk, *border, border_render_style);
             content_area = Area::new(
                 (area.x() + 1, area.y() + 1).into(),
                 (

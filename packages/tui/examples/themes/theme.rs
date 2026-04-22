@@ -4,7 +4,7 @@
 //! Use Left/Right or 1/2/3 to switch themes. Tab focuses the interactive controls. Esc to quit.
 
 use tui::prelude::*;
-use tui::style::{ThemeColors, ThemeStyles};
+use tui::style::ThemeStyles;
 
 const THEME_COUNT: usize = 3;
 
@@ -56,9 +56,7 @@ fn update(state: &mut State, msg: Msg) {
 
 fn view(state: &State) -> impl Widget<Msg> {
     let theme = theme_for(state.active_theme);
-    let card_style = Style::default()
-        .fg(theme.colors.border)
-        .bg(theme.colors.surface);
+    let card_style = theme.styles.border.merge(theme.styles.surface_elevated);
 
     col::<Msg>()
         .padding(Padding::uniform(1))
@@ -87,27 +85,27 @@ fn view(state: &State) -> impl Widget<Msg> {
                 .padding(Padding::uniform(1))
                 .style(card_style)
                 .gap(1)
-                .child(label("Palette").style(theme.styles.text_heading))
+                .child(label("Semantic Styles").style(theme.styles.text_heading))
                 .child(
                     label(theme_description(state.active_theme)).style(theme.styles.text_muted),
                 )
                 .child(
                     row::<Msg>()
                         .gap(1)
-                        .child(swatch(" primary ", theme.colors.primary))
-                        .child(swatch(" secondary ", theme.colors.secondary))
-                        .child(swatch(" success ", theme.colors.success))
-                        .child(swatch(" warning ", theme.colors.warning))
-                        .child(swatch(" danger ", theme.colors.danger)),
+                        .child(swatch(" primary ", theme.styles.primary_action, card_style))
+                        .child(swatch(" secondary ", theme.styles.secondary_action, card_style))
+                        .child(swatch(" danger ", theme.styles.destructive_action, card_style))
+                        .child(swatch(" selected ", theme.styles.selected, card_style))
+                        .child(swatch(" focused ", theme.styles.selected_focused, card_style)),
                 )
                 .child(
                     row::<Msg>()
                         .gap(1)
-                        .child(swatch(" info ", theme.colors.info))
-                        .child(swatch(" text ", theme.colors.text))
-                        .child(swatch(" muted ", theme.colors.text_muted))
-                        .child(swatch(" surface ", theme.colors.surface))
-                        .child(swatch(" focus ", theme.colors.focus_ring)),
+                        .child(swatch(" interactive ", theme.styles.interactive, card_style))
+                        .child(swatch(" active ", theme.styles.list_active, card_style))
+                        .child(swatch(" header ", theme.styles.surface_header, card_style))
+                        .child(swatch(" border ", theme.styles.border, card_style))
+                        .child(swatch(" focus ring ", theme.styles.border_focused, card_style)),
                 ),
         )
         .child(
@@ -172,8 +170,11 @@ fn theme_button(label_text: &'static str, index: usize, active_theme: usize) -> 
         .on_click(move || Msg::SetTheme(index))
 }
 
-fn swatch(label_text: &'static str, color: Color) -> Label<Msg> {
-    label(label_text).style(Style::default().fg(contrast_color(color)).bg(color).bold())
+fn swatch(label_text: &'static str, style: Style, base: Style) -> Label<Msg> {
+    // Some semantic styles only define part of the final appearance, such as
+    // a border/focus color with no background. Merge them over a stable card
+    // surface so the preview chip always renders as a complete block.
+    label(label_text).style(style.merge(base).bold())
 }
 
 fn cycle_theme(active_theme: usize, delta: isize) -> usize {
@@ -215,78 +216,70 @@ fn theme_for(index: usize) -> Theme {
 }
 
 fn sunset_theme() -> Theme {
-    let colors = ThemeColors {
-        primary: Color::Rgb(255, 140, 92),
-        secondary: Color::Rgb(255, 196, 107),
-        success: Color::Rgb(104, 211, 145),
-        danger: Color::Rgb(255, 107, 129),
-        warning: Color::Rgb(255, 184, 77),
-        info: Color::Rgb(122, 211, 255),
-        text: Color::Rgb(255, 243, 230),
-        text_muted: Color::Rgb(223, 198, 176),
-        background: Color::Rgb(34, 20, 35),
-        surface: Color::Rgb(59, 36, 58),
-        border: Color::Rgb(137, 93, 123),
-        focus_ring: Color::Rgb(255, 214, 102),
-        focus_background: Color::Rgb(92, 53, 84),
-    };
-
-    let mut styles = ThemeStyles::dark(&colors);
+    let mut styles = ThemeStyles::dark();
     styles.primary_action = Style::default()
         .fg(Color::Rgb(34, 20, 35))
-        .bg(colors.primary)
+        .bg(Color::Rgb(255, 140, 92))
         .bold();
     styles.primary_action_focused = Style::default()
         .fg(Color::Rgb(34, 20, 35))
-        .bg(colors.focus_ring)
+        .bg(Color::Rgb(255, 214, 102))
         .bold();
     styles.secondary_action = Style::default()
         .fg(Color::Rgb(34, 20, 35))
-        .bg(colors.secondary);
+        .bg(Color::Rgb(255, 196, 107));
     styles.secondary_action_focused = Style::default()
         .fg(Color::Rgb(34, 20, 35))
-        .bg(colors.secondary)
+        .bg(Color::Rgb(255, 196, 107))
         .bold();
-    styles.interactive = Style::default().fg(colors.text).bg(colors.surface);
+    styles.destructive_action = Style::default()
+        .fg(Color::Rgb(34, 20, 35))
+        .bg(Color::Rgb(255, 107, 129))
+        .bold();
+    styles.destructive_action_focused = styles.destructive_action.bold();
+    styles.interactive = Style::default()
+        .fg(Color::Rgb(255, 243, 230))
+        .bg(Color::Rgb(59, 36, 58));
     styles.interactive_focused = Style::default()
-        .fg(colors.text)
-        .bg(colors.focus_background)
+        .fg(Color::Rgb(255, 243, 230))
+        .bg(Color::Rgb(92, 53, 84))
         .bold();
-    styles.surface = Style::default().fg(colors.text).bg(colors.background);
-    styles.surface_elevated = Style::default().fg(colors.text).bg(colors.surface);
+    styles.text = Style::default().fg(Color::Rgb(255, 243, 230));
+    styles.text_muted = Style::default().fg(Color::Rgb(223, 198, 176));
+    styles.text_placeholder = styles.text_muted;
+    styles.text_heading = styles.text.bold();
+    styles.surface = Style::default()
+        .fg(Color::Rgb(255, 243, 230))
+        .bg(Color::Rgb(34, 20, 35));
+    styles.surface_elevated = Style::default()
+        .fg(Color::Rgb(255, 243, 230))
+        .bg(Color::Rgb(59, 36, 58));
+    styles.surface_header = Style::default()
+        .fg(Color::Rgb(255, 243, 230))
+        .bg(Color::Rgb(59, 36, 58))
+        .bold();
     styles.selected = Style::default()
         .fg(Color::Rgb(34, 20, 35))
-        .bg(colors.primary)
+        .bg(Color::Rgb(255, 140, 92))
+        .bold();
+    styles.selected_focused = Style::default()
+        .fg(Color::Rgb(255, 243, 230))
+        .bg(Color::Rgb(92, 53, 84))
+        .bold();
+    styles.list_active = styles.selected_focused;
+    styles.list_active_focused = Style::default()
+        .fg(Color::Rgb(255, 243, 230))
+        .bg(Color::Rgb(59, 36, 58))
         .bold();
     styles.hover = Style::default()
         .fg(Color::Rgb(34, 20, 35))
-        .bg(colors.focus_ring)
+        .bg(Color::Rgb(255, 214, 102))
         .bold();
+    styles.border = Style::default().fg(Color::Rgb(137, 93, 123));
+    styles.border_focused = Style::default().fg(Color::Rgb(255, 214, 102));
+    styles.cursor = Style::default()
+        .fg(Color::Rgb(34, 20, 35))
+        .bg(Color::Rgb(255, 243, 230));
 
-    Theme::builder()
-        .name("sunset")
-        .colors(colors)
-        .styles(styles)
-        .build()
-}
-
-fn contrast_color(color: Color) -> Color {
-    match color {
-        Color::Black
-        | Color::Red
-        | Color::Green
-        | Color::Blue
-        | Color::Magenta
-        | Color::Rgb(0..=127, _, _)
-        | Color::Indexed(0..=7) => Color::White,
-        Color::Rgb(r, g, b) => {
-            let luminance = (r as u32 * 299) + (g as u32 * 587) + (b as u32 * 114);
-            if luminance / 1000 > 150 {
-                Color::Black
-            } else {
-                Color::White
-            }
-        }
-        _ => Color::Black,
-    }
+    Theme::builder().name("sunset").styles(styles).build()
 }

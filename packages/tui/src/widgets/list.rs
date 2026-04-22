@@ -259,12 +259,9 @@ impl<M: 'static> Widget<M> for List<M> {
         };
         let active_style = if is_focused {
             self.custom_focus_style
-                .unwrap_or(theme.styles.interactive_focused)
+                .unwrap_or(theme.styles.list_active_focused)
         } else {
-            Style::default()
-                .fg(theme.colors.text)
-                .bg(theme.colors.focus_background)
-                .bold()
+            theme.styles.list_active
         };
         let row_style = self
             .custom_style
@@ -275,11 +272,9 @@ impl<M: 'static> Widget<M> for List<M> {
         let active_row_style = active_style.to_render_style();
         let disabled_row_style = theme.styles.interactive_disabled.to_render_style();
         let border_style = if is_focused {
-            Style::default()
-                .fg(theme.colors.focus_ring)
-                .to_render_style()
+            theme.styles.border_focused.to_render_style()
         } else {
-            Style::default().fg(theme.colors.border).to_render_style()
+            theme.styles.border.to_render_style()
         };
 
         let _ = chunk.fill(0, 0, area.width(), area.height(), ' ', row_style);
