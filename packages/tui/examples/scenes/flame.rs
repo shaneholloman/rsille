@@ -207,10 +207,8 @@ fn index(x: usize, y: usize) -> usize {
 }
 
 fn hash01(a: u32, b: u32, c: u32) -> f32 {
-    let mut value = a
-        .wrapping_mul(0x9e37_79b9)
-        ^ b.wrapping_mul(0x85eb_ca6b)
-        ^ c.wrapping_mul(0xc2b2_ae35);
+    let mut value =
+        a.wrapping_mul(0x9e37_79b9) ^ b.wrapping_mul(0x85eb_ca6b) ^ c.wrapping_mul(0xc2b2_ae35);
     value ^= value >> 16;
     value = value.wrapping_mul(0x7feb_352d);
     value ^= value >> 15;

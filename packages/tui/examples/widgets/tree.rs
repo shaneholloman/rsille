@@ -44,28 +44,22 @@ fn view(state: &State) -> impl Widget<Msg> {
                                 .child(
                                     TreeItem::new("packages/tui/examples", "examples")
                                         .child(
-                                            TreeItem::new(
-                                                "packages/tui/examples/basics",
-                                                "basics",
-                                            )
-                                            .child(TreeItem::new(
-                                                "packages/tui/examples/basics/hello.rs",
-                                                "hello.rs",
-                                            )),
+                                            TreeItem::new("packages/tui/examples/basics", "basics")
+                                                .child(TreeItem::new(
+                                                    "packages/tui/examples/basics/hello.rs",
+                                                    "hello.rs",
+                                                )),
                                         )
                                         .child(
-                                            TreeItem::new(
-                                                "packages/tui/examples/layout",
-                                                "layout",
-                                            )
-                                            .child(TreeItem::new(
-                                                "packages/tui/examples/layout/grid.rs",
-                                                "grid.rs",
-                                            ))
-                                            .child(TreeItem::new(
-                                                "packages/tui/examples/layout/layout.rs",
-                                                "layout.rs",
-                                            )),
+                                            TreeItem::new("packages/tui/examples/layout", "layout")
+                                                .child(TreeItem::new(
+                                                    "packages/tui/examples/layout/grid.rs",
+                                                    "grid.rs",
+                                                ))
+                                                .child(TreeItem::new(
+                                                    "packages/tui/examples/layout/layout.rs",
+                                                    "layout.rs",
+                                                )),
                                         )
                                         .child(
                                             TreeItem::new(
@@ -80,28 +74,27 @@ fn view(state: &State) -> impl Widget<Msg> {
                                                 "packages/tui/examples/widgets/tree.rs",
                                                 "tree.rs",
                                             ))
-                                            .child(TreeItem::new(
-                                                "packages/tui/examples/widgets/more",
-                                                "... 5 more",
-                                            )),
+                                            .child(
+                                                TreeItem::new(
+                                                    "packages/tui/examples/widgets/more",
+                                                    "... 5 more",
+                                                ),
+                                            ),
                                         )
                                         .child(
-                                            TreeItem::new(
-                                                "packages/tui/examples/scenes",
-                                                "scenes",
-                                            )
-                                            .child(TreeItem::new(
-                                                "packages/tui/examples/scenes/flame.rs",
-                                                "flame.rs",
-                                            ))
-                                            .child(TreeItem::new(
-                                                "packages/tui/examples/scenes/wave.rs",
-                                                "wave.rs",
-                                            ))
-                                            .child(TreeItem::new(
-                                                "packages/tui/examples/scenes/more",
-                                                "... 3 more",
-                                            )),
+                                            TreeItem::new("packages/tui/examples/scenes", "scenes")
+                                                .child(TreeItem::new(
+                                                    "packages/tui/examples/scenes/flame.rs",
+                                                    "flame.rs",
+                                                ))
+                                                .child(TreeItem::new(
+                                                    "packages/tui/examples/scenes/wave.rs",
+                                                    "wave.rs",
+                                                ))
+                                                .child(TreeItem::new(
+                                                    "packages/tui/examples/scenes/more",
+                                                    "... 3 more",
+                                                )),
                                         ),
                                 ),
                         )

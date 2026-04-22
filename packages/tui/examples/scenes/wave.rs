@@ -72,18 +72,13 @@ fn cell_color(state: &State, x: usize, y: usize) -> Color {
     let nx = x as f32 / (WIDTH.saturating_sub(1) as f32);
     let ny = y as f32 / (HEIGHT.saturating_sub(1) as f32);
 
-    let far_wave = 0.22
-        + 0.030 * (nx * 7.0 + t * 0.55).sin()
-        + 0.012 * (nx * 3.0 - t * 0.30).cos();
-    let upper_wave = 0.38
-        + 0.042 * (nx * 9.0 - t * 0.95).sin()
-        + 0.012 * (nx * 4.8 + t * 0.55).cos();
-    let mid_wave = 0.56
-        + 0.055 * (nx * 12.0 + t * 1.45).sin()
-        + 0.016 * (nx * 5.5 - t * 0.70).cos();
-    let front_wave = 0.76
-        + 0.080 * (nx * 15.5 - t * 2.05).sin()
-        + 0.022 * (nx * 6.5 + t * 1.10).cos();
+    let far_wave = 0.22 + 0.030 * (nx * 7.0 + t * 0.55).sin() + 0.012 * (nx * 3.0 - t * 0.30).cos();
+    let upper_wave =
+        0.38 + 0.042 * (nx * 9.0 - t * 0.95).sin() + 0.012 * (nx * 4.8 + t * 0.55).cos();
+    let mid_wave =
+        0.56 + 0.055 * (nx * 12.0 + t * 1.45).sin() + 0.016 * (nx * 5.5 - t * 0.70).cos();
+    let front_wave =
+        0.76 + 0.080 * (nx * 15.5 - t * 2.05).sin() + 0.022 * (nx * 6.5 + t * 1.10).cos();
 
     if near_wave(ny, front_wave, 0.016) {
         return if stripe(nx, t, 28.0) {
