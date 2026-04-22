@@ -5,7 +5,7 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 use crate::event::{Event, KeyCode};
 use crate::focus::FocusConfig;
 use crate::layout::border_renderer;
-use crate::layout::Constraints;
+use crate::layout::{ensure_item_visible, Constraints};
 use crate::style::{BorderStyle, Style};
 use crate::widget::{EventCtx, EventPhase, RenderCtx, Widget};
 
@@ -207,19 +207,6 @@ impl<M> List<M> {
             .map(|(index, _)| index)
     }
 
-    fn ensure_visible(scroll_offset: usize, active_index: usize, visible_rows: usize) -> usize {
-        if visible_rows == 0 {
-            return 0;
-        }
-        if active_index < scroll_offset {
-            active_index
-        } else if active_index >= scroll_offset + visible_rows {
-            active_index + 1 - visible_rows
-        } else {
-            scroll_offset
-        }
-    }
-
     fn truncate_to_width(text: &str, max_width: usize) -> String {
         let mut out = String::new();
         let mut width = 0;
@@ -301,7 +288,7 @@ impl<M: 'static> Widget<M> for List<M> {
 
         let visible_rows = content_height as usize;
         let mut scroll_offset = state.scroll_offset.min(self.items.len().saturating_sub(1));
-        scroll_offset = Self::ensure_visible(scroll_offset, active_index, visible_rows);
+        scroll_offset = ensure_item_visible(scroll_offset, active_index, visible_rows);
 
         for row in 0..visible_rows {
             let item_index = scroll_offset + row;
@@ -410,7 +397,7 @@ impl<M: 'static> Widget<M> for List<M> {
 
             state.active_item = Some(self.items[active_index].id.clone());
             state.scroll_offset =
-                Self::ensure_visible(state.scroll_offset, active_index, visible_rows);
+                ensure_item_visible(state.scroll_offset, active_index, visible_rows);
             state.active_item.clone()
         };
 

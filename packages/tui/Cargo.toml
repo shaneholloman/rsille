@@ -27,6 +27,10 @@ name = "layout"
 path = "examples/layout/layout.rs"
 
 [[example]]
+name = "primitives"
+path = "examples/layout/primitives.rs"
+
+[[example]]
 name = "theme"
 path = "examples/themes/theme.rs"
 

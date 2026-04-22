@@ -1,7 +1,9 @@
 use std::any::Any;
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fmt;
 
+use render::area::Area;
 use render::chunk::Chunk;
 use smallvec::SmallVec;
 
@@ -232,6 +234,7 @@ pub struct RenderCtx<'a> {
     theme: &'a Theme,
     focused_path: Option<&'a WidgetPath>,
     current_path: WidgetPath,
+    geometry: &'a RefCell<HashMap<WidgetPath, Area>>,
 }
 
 impl<'a> RenderCtx<'a> {
@@ -239,12 +242,14 @@ impl<'a> RenderCtx<'a> {
         store: &'a WidgetStore,
         theme: &'a Theme,
         focused_path: Option<&'a WidgetPath>,
+        geometry: &'a RefCell<HashMap<WidgetPath, Area>>,
     ) -> Self {
         Self {
             store,
             theme,
             focused_path,
             current_path: WidgetPath::root(),
+            geometry,
         }
     }
 
@@ -326,12 +331,20 @@ impl<'a> RenderCtx<'a> {
             theme: self.theme,
             focused_path: self.focused_path,
             current_path: self.current_path.child(key),
+            geometry: self.geometry,
         }
     }
 
     /// The current widget path in the tree.
     pub fn path(&self) -> &WidgetPath {
         &self.current_path
+    }
+
+    /// Record the rendered bounds for the current widget.
+    pub fn record_bounds(&self, area: Area) {
+        self.geometry
+            .borrow_mut()
+            .insert(self.current_path.clone(), area);
     }
 }
 
@@ -374,7 +387,9 @@ pub struct EventCtx<'a, M> {
     messages: &'a mut Vec<M>,
     path: WidgetPath,
     focused_path: Option<WidgetPath>,
+    geometry: &'a HashMap<WidgetPath, Area>,
     phase: EventPhase,
+    already_handled: bool,
     handled: bool,
     stop_propagation: bool,
     focus_request: Option<FocusRequest>,
@@ -386,14 +401,18 @@ impl<'a, M> EventCtx<'a, M> {
         messages: &'a mut Vec<M>,
         path: WidgetPath,
         focused_path: Option<WidgetPath>,
+        geometry: &'a HashMap<WidgetPath, Area>,
         phase: EventPhase,
+        already_handled: bool,
     ) -> Self {
         Self {
             store,
             messages,
             path,
             focused_path,
+            geometry,
             phase,
+            already_handled,
             handled: false,
             stop_propagation: false,
             focus_request: None,
@@ -424,6 +443,21 @@ impl<'a, M> EventCtx<'a, M> {
     /// The current routing phase.
     pub fn phase(&self) -> EventPhase {
         self.phase
+    }
+
+    /// Whether an earlier handler in the current routing pass already handled this event.
+    pub fn was_handled(&self) -> bool {
+        self.already_handled
+    }
+
+    /// The last rendered bounds for the current widget.
+    pub fn bounds(&self) -> Option<Area> {
+        self.geometry.get(&self.path).copied()
+    }
+
+    /// The last rendered bounds for an arbitrary widget path.
+    pub fn bounds_for(&self, path: &WidgetPath) -> Option<Area> {
+        self.geometry.get(path).copied()
     }
 
     /// Mark the event as handled.

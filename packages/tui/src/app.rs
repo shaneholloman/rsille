@@ -1,3 +1,4 @@
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
@@ -105,6 +106,7 @@ pub struct App<State, M = ()> {
     tick_handlers: Vec<TickConfig<M>>,
     frame_handlers: Vec<FrameConfig<M>>,
     quit_behavior: QuitBehavior,
+    mouse_capture: bool,
 }
 
 impl<State: std::fmt::Debug, M> std::fmt::Debug for App<State, M> {
@@ -126,6 +128,7 @@ impl<State, M: Clone + std::fmt::Debug + 'static> App<State, M> {
             tick_handlers: Vec::new(),
             frame_handlers: Vec::new(),
             quit_behavior: QuitBehavior::default(),
+            mouse_capture: false,
         }
     }
 
@@ -206,6 +209,12 @@ impl<State, M: Clone + std::fmt::Debug + 'static> App<State, M> {
         self
     }
 
+    /// Enable mouse capture for wheel, click, and drag interactions.
+    pub fn enable_mouse_capture(mut self) -> Self {
+        self.mouse_capture = true;
+        self
+    }
+
     /// Run the application in full-screen mode.
     pub fn run<F, V, W>(self, update: F, view: V) -> WidgetResult<()>
     where
@@ -252,6 +261,7 @@ impl<State, M: Clone + std::fmt::Debug + 'static> App<State, M> {
             tick_handlers,
             frame_handlers,
             quit_behavior,
+            mouse_capture,
         } = self;
 
         let runtime = AppRuntime {
@@ -261,6 +271,7 @@ impl<State, M: Clone + std::fmt::Debug + 'static> App<State, M> {
             update_fn: update,
             view_fn: view,
             store: WidgetStore::new(),
+            geometry: RefCell::new(HashMap::new()),
             focus: FocusManager::new(),
             cached_tree: None,
             messages: Vec::new(),
@@ -291,6 +302,9 @@ impl<State, M: Clone + std::fmt::Debug + 'static> App<State, M> {
             .append_newline(false)
             .enable_hide_cursor()
             .disable_exit_code();
+        if mouse_capture {
+            builder.enable_mouse_capture();
+        }
 
         if inline_mode {
             builder
@@ -327,6 +341,7 @@ struct AppRuntime<State, F, V, M> {
     update_fn: F,
     view_fn: V,
     store: WidgetStore,
+    geometry: RefCell<HashMap<WidgetPath, render::area::Area>>,
     focus: FocusManager,
     cached_tree: Option<Box<dyn Widget<M>>>,
     messages: Vec<M>,
@@ -401,9 +416,19 @@ impl<State, F, V, M> AppRuntime<State, F, V, M> {
         messages: &mut Vec<M>,
         path: WidgetPath,
         focused_path: Option<WidgetPath>,
+        geometry: &HashMap<WidgetPath, render::area::Area>,
         phase: EventPhase,
+        already_handled: bool,
     ) -> crate::widget::EventOutcome {
-        let mut ctx = EventCtx::new(store, messages, path, focused_path, phase);
+        let mut ctx = EventCtx::new(
+            store,
+            messages,
+            path,
+            focused_path,
+            geometry,
+            phase,
+            already_handled,
+        );
         widget.handle_event(event, &mut ctx);
         ctx.finish()
     }
@@ -438,6 +463,7 @@ impl<State, F, V, M> AppRuntime<State, F, V, M> {
         store: &mut WidgetStore,
         messages: &mut Vec<M>,
         focus: &mut FocusManager,
+        geometry: &HashMap<WidgetPath, render::area::Area>,
     ) -> bool {
         let route = Self::build_event_route(tree, focus.current_path());
         let mut handled = false;
@@ -452,7 +478,9 @@ impl<State, F, V, M> AppRuntime<State, F, V, M> {
                 messages,
                 path.clone(),
                 focused_snapshot.clone(),
+                geometry,
                 EventPhase::Capture,
+                handled,
             );
             handled |= outcome.handled;
             Self::apply_focus_request(focus, outcome.focus_request);
@@ -469,7 +497,9 @@ impl<State, F, V, M> AppRuntime<State, F, V, M> {
                 messages,
                 path.clone(),
                 focused_snapshot.clone(),
+                geometry,
                 EventPhase::Target,
+                handled,
             );
             handled |= outcome.handled;
             Self::apply_focus_request(focus, outcome.focus_request);
@@ -486,7 +516,9 @@ impl<State, F, V, M> AppRuntime<State, F, V, M> {
                 messages,
                 path.clone(),
                 focused_snapshot.clone(),
+                geometry,
                 EventPhase::Bubble,
+                handled,
             );
             handled |= outcome.handled;
             Self::apply_focus_request(focus, outcome.focus_request);
@@ -557,7 +589,8 @@ where
 
         // Render
         let focused_path = self.focus.current_path();
-        let ctx = RenderCtx::new(&self.store, &self.theme, focused_path);
+        self.geometry.borrow_mut().clear();
+        let ctx = RenderCtx::new(&self.store, &self.theme, focused_path, &self.geometry);
         tree.render(&mut chunk, &ctx);
 
         // Cache tree for event handling in on_events()
@@ -582,6 +615,7 @@ where
         self.ensure_tree();
 
         let tree = self.cached_tree.as_ref().unwrap();
+        let geometry = self.geometry.borrow();
 
         for event in events {
             if let Event::Resize(_, _) = event {
@@ -594,6 +628,7 @@ where
                 &mut self.store,
                 &mut self.messages,
                 &mut self.focus,
+                &geometry,
             ) {
                 continue;
             }
