@@ -1,7 +1,6 @@
 //! TextInput widget — stateful text input using WidgetStore
 
 use std::borrow::Cow;
-use std::sync::Arc;
 
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
@@ -52,8 +51,8 @@ pub struct TextInput<M = ()> {
     disabled: bool,
     custom_style: Option<Style>,
     custom_focus_style: Option<Style>,
-    on_change: Option<Arc<dyn Fn(String) -> M + Send + Sync>>,
-    on_submit: Option<Arc<dyn Fn(String) -> M + Send + Sync>>,
+    on_change: Option<Box<dyn Fn(String) -> M>>,
+    on_submit: Option<Box<dyn Fn(String) -> M>>,
     widget_key: Option<String>,
 }
 
@@ -122,17 +121,17 @@ impl<M> TextInput<M> {
 
     pub fn on_change<F>(mut self, handler: F) -> Self
     where
-        F: Fn(String) -> M + Send + Sync + 'static,
+        F: Fn(String) -> M + 'static,
     {
-        self.on_change = Some(Arc::new(handler));
+        self.on_change = Some(Box::new(handler));
         self
     }
 
     pub fn on_submit<F>(mut self, handler: F) -> Self
     where
-        F: Fn(String) -> M + Send + Sync + 'static,
+        F: Fn(String) -> M + 'static,
     {
-        self.on_submit = Some(Arc::new(handler));
+        self.on_submit = Some(Box::new(handler));
         self
     }
 
@@ -166,7 +165,7 @@ impl<M> Default for TextInput<M> {
     }
 }
 
-impl<M: Send + Sync + 'static> Widget<M> for TextInput<M> {
+impl<M: 'static> Widget<M> for TextInput<M> {
     fn render(&self, chunk: &mut render::chunk::Chunk, ctx: &RenderCtx) {
         let area = chunk.area();
         let width = area.width();

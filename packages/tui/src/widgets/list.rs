@@ -1,7 +1,5 @@
 //! List widget with roving internal selection.
 
-use std::sync::Arc;
-
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::event::{Event, KeyCode};
@@ -61,8 +59,8 @@ pub struct List<M = ()> {
     disabled: bool,
     custom_style: Option<Style>,
     custom_focus_style: Option<Style>,
-    on_change: Option<Arc<dyn Fn(String) -> M + Send + Sync>>,
-    on_submit: Option<Arc<dyn Fn(String) -> M + Send + Sync>>,
+    on_change: Option<Box<dyn Fn(String) -> M>>,
+    on_submit: Option<Box<dyn Fn(String) -> M>>,
     widget_key: Option<String>,
 }
 
@@ -145,17 +143,17 @@ impl<M> List<M> {
 
     pub fn on_change<F>(mut self, handler: F) -> Self
     where
-        F: Fn(String) -> M + Send + Sync + 'static,
+        F: Fn(String) -> M + 'static,
     {
-        self.on_change = Some(Arc::new(handler));
+        self.on_change = Some(Box::new(handler));
         self
     }
 
     pub fn on_submit<F>(mut self, handler: F) -> Self
     where
-        F: Fn(String) -> M + Send + Sync + 'static,
+        F: Fn(String) -> M + 'static,
     {
-        self.on_submit = Some(Arc::new(handler));
+        self.on_submit = Some(Box::new(handler));
         self
     }
 
@@ -245,7 +243,7 @@ impl<M> Default for List<M> {
     }
 }
 
-impl<M: Send + Sync + 'static> Widget<M> for List<M> {
+impl<M: 'static> Widget<M> for List<M> {
     fn render(&self, chunk: &mut render::chunk::Chunk, ctx: &RenderCtx) {
         let area = chunk.area();
         if area.width() == 0 || area.height() == 0 {

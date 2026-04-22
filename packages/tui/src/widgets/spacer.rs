@@ -65,7 +65,7 @@ impl<M> Default for Spacer<M> {
     }
 }
 
-impl<M: Send + Sync> Widget<M> for Spacer<M> {
+impl<M> Widget<M> for Spacer<M> {
     fn render(&self, _chunk: &mut render::chunk::Chunk, _ctx: &RenderCtx) {}
 
     fn handle_event(&self, _event: &Event, _ctx: &mut EventCtx<M>) {}

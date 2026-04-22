@@ -150,7 +150,7 @@ impl<M> Flex<M> {
     }
 }
 
-impl<M: Send + Sync> Flex<M> {
+impl<M> Flex<M> {
     pub fn child(mut self, widget: impl IntoWidget<M>) -> Self {
         self.children.push(widget.into_widget());
         self
@@ -167,7 +167,7 @@ impl<M: Send + Sync> Flex<M> {
     }
 }
 
-impl<M: Send + Sync> Widget<M> for Flex<M> {
+impl<M> Widget<M> for Flex<M> {
     fn render(&self, chunk: &mut render::chunk::Chunk, ctx: &RenderCtx) {
         let area = chunk.area();
         if area.width() == 0 || area.height() == 0 {

@@ -64,7 +64,7 @@ impl<M> Label<M> {
     }
 }
 
-impl<M: Send + Sync> Widget<M> for Label<M> {
+impl<M> Widget<M> for Label<M> {
     fn render(&self, chunk: &mut render::chunk::Chunk, _ctx: &RenderCtx) {
         let area = chunk.area();
         if area.width() == 0 || area.height() == 0 {

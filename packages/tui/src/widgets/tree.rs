@@ -1,7 +1,5 @@
 //! Tree widget with expandable nodes and internal navigation.
 
-use std::sync::Arc;
-
 use rustc_hash::FxHashSet;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
@@ -78,8 +76,8 @@ pub struct Tree<M = ()> {
     empty_message: String,
     custom_style: Option<Style>,
     custom_focus_style: Option<Style>,
-    on_change: Option<Arc<dyn Fn(String) -> M + Send + Sync>>,
-    on_submit: Option<Arc<dyn Fn(String) -> M + Send + Sync>>,
+    on_change: Option<Box<dyn Fn(String) -> M>>,
+    on_submit: Option<Box<dyn Fn(String) -> M>>,
     widget_key: Option<String>,
 }
 
@@ -168,17 +166,17 @@ impl<M> Tree<M> {
 
     pub fn on_change<F>(mut self, handler: F) -> Self
     where
-        F: Fn(String) -> M + Send + Sync + 'static,
+        F: Fn(String) -> M + 'static,
     {
-        self.on_change = Some(Arc::new(handler));
+        self.on_change = Some(Box::new(handler));
         self
     }
 
     pub fn on_submit<F>(mut self, handler: F) -> Self
     where
-        F: Fn(String) -> M + Send + Sync + 'static,
+        F: Fn(String) -> M + 'static,
     {
-        self.on_submit = Some(Arc::new(handler));
+        self.on_submit = Some(Box::new(handler));
         self
     }
 
@@ -305,7 +303,7 @@ impl<M> Default for Tree<M> {
     }
 }
 
-impl<M: Send + Sync + 'static> Widget<M> for Tree<M> {
+impl<M: 'static> Widget<M> for Tree<M> {
     fn render(&self, chunk: &mut render::chunk::Chunk, ctx: &RenderCtx) {
         let area = chunk.area();
         if area.width() == 0 || area.height() == 0 {

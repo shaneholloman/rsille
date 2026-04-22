@@ -1,7 +1,5 @@
 //! Button widget — focusable interactive button
 
-use std::sync::Arc;
-
 use crate::event::{Event, KeyCode};
 use crate::focus::FocusConfig;
 use crate::layout::Constraints;
@@ -26,7 +24,7 @@ pub struct Button<M = ()> {
     label: String,
     variant: ButtonVariant,
     disabled: bool,
-    on_click: Option<Arc<dyn Fn() -> M + Send + Sync>>,
+    on_click: Option<Box<dyn Fn() -> M>>,
     widget_key: Option<String>,
 }
 
@@ -69,9 +67,9 @@ impl<M> Button<M> {
 
     pub fn on_click<F>(mut self, handler: F) -> Self
     where
-        F: Fn() -> M + Send + Sync + 'static,
+        F: Fn() -> M + 'static,
     {
-        self.on_click = Some(Arc::new(handler));
+        self.on_click = Some(Box::new(handler));
         self
     }
 
@@ -125,7 +123,7 @@ impl<M> Button<M> {
     }
 }
 
-impl<M: Send + Sync> Widget<M> for Button<M> {
+impl<M> Widget<M> for Button<M> {
     fn render(&self, chunk: &mut render::chunk::Chunk, ctx: &RenderCtx) {
         let area = chunk.area();
         if area.width() == 0 || area.height() == 0 {

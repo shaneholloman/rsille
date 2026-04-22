@@ -189,7 +189,7 @@ impl Builder {
 
     pub fn build_event_loop<T>(&self, thing: T) -> EventLoop<T>
     where
-        T: DrawUpdate + Send + Sync + 'static,
+        T: DrawUpdate,
     {
         info!(
             target: "render::builder",

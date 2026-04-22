@@ -165,7 +165,7 @@ impl<M> Grid<M> {
     }
 }
 
-impl<M: Send + Sync> Grid<M> {
+impl<M> Grid<M> {
     pub fn child(mut self, widget: impl IntoWidget<M>) -> Self {
         self.children.push(widget.into_widget());
         self.placements.push(GridPlacement::default());
@@ -209,7 +209,7 @@ impl<M: Send + Sync> Grid<M> {
     }
 }
 
-impl<M: Send + Sync> Widget<M> for Grid<M> {
+impl<M> Widget<M> for Grid<M> {
     fn render(&self, chunk: &mut render::chunk::Chunk, ctx: &RenderCtx) {
         let area = chunk.area();
         if area.width() == 0 || area.height() == 0 {

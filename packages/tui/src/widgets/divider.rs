@@ -200,7 +200,7 @@ impl<M> Default for Divider<M> {
     }
 }
 
-impl<M: Send + Sync> Widget<M> for Divider<M> {
+impl<M> Widget<M> for Divider<M> {
     fn render(&self, chunk: &mut render::chunk::Chunk, _ctx: &RenderCtx) {
         let area = chunk.area();
         if area.width() == 0 || area.height() == 0 {

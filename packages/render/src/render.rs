@@ -311,7 +311,7 @@ where
 impl<W, T> Render<W, T>
 where
     W: std::io::Write,
-    T: DrawUpdate + Send + Sync + 'static,
+    T: DrawUpdate,
 {
     pub fn update(&mut self) -> Result<bool, DrawErr> {
         self.thing.update()

@@ -1,7 +1,5 @@
 //! Calendar widget for date navigation and selection.
 
-use std::sync::Arc;
-
 use crate::event::{Event, KeyCode};
 use crate::focus::FocusConfig;
 use crate::layout::border_renderer;
@@ -47,8 +45,8 @@ pub struct Calendar<M = ()> {
     disabled: bool,
     custom_style: Option<Style>,
     custom_focus_style: Option<Style>,
-    on_change: Option<Arc<dyn Fn(CalendarDate) -> M + Send + Sync>>,
-    on_submit: Option<Arc<dyn Fn(CalendarDate) -> M + Send + Sync>>,
+    on_change: Option<Box<dyn Fn(CalendarDate) -> M>>,
+    on_submit: Option<Box<dyn Fn(CalendarDate) -> M>>,
     widget_key: Option<String>,
 }
 
@@ -110,17 +108,17 @@ impl<M> Calendar<M> {
 
     pub fn on_change<F>(mut self, handler: F) -> Self
     where
-        F: Fn(CalendarDate) -> M + Send + Sync + 'static,
+        F: Fn(CalendarDate) -> M + 'static,
     {
-        self.on_change = Some(Arc::new(handler));
+        self.on_change = Some(Box::new(handler));
         self
     }
 
     pub fn on_submit<F>(mut self, handler: F) -> Self
     where
-        F: Fn(CalendarDate) -> M + Send + Sync + 'static,
+        F: Fn(CalendarDate) -> M + 'static,
     {
-        self.on_submit = Some(Arc::new(handler));
+        self.on_submit = Some(Box::new(handler));
         self
     }
 
@@ -143,7 +141,7 @@ impl<M> Calendar<M> {
     }
 }
 
-impl<M: Send + Sync + 'static> Widget<M> for Calendar<M> {
+impl<M: 'static> Widget<M> for Calendar<M> {
     fn render(&self, chunk: &mut render::chunk::Chunk, ctx: &RenderCtx) {
         let area = chunk.area();
         if area.width() == 0 || area.height() == 0 {

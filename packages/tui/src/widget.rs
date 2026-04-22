@@ -154,7 +154,7 @@ impl fmt::Display for WidgetPath {
 /// [`WidgetStore`] (accessed via contexts), not inside the widget itself.
 ///
 /// The generic parameter `M` is the message type for the application.
-pub trait Widget<M>: Send + Sync {
+pub trait Widget<M> {
     /// Render the widget into the provided chunk.
     ///
     /// Read persistent state from `ctx.state::<T>()` and focus info from
@@ -270,14 +270,14 @@ impl<'a> RenderCtx<'a> {
 
     /// Read persistent state stored for this widget.
     /// Returns `None` if no state has been stored yet.
-    pub fn state<T: Default + Send + Sync + 'static>(&self) -> Option<&T> {
+    pub fn state<T: Default + 'static>(&self) -> Option<&T> {
         self.store.get::<T>(&self.current_path)
     }
 
     /// Read persistent state, or return a default reference if absent.
     /// This is a convenience that avoids `unwrap_or` at every call-site
     /// by falling back to a leaked static default. Use sparingly.
-    pub fn state_or_default<T: Default + Send + Sync + 'static>(&self) -> &T {
+    pub fn state_or_default<T: Default + 'static>(&self) -> &T {
         self.store.get::<T>(&self.current_path).unwrap_or_else(|| {
             // Safe: Default is computed once per type via OnceLock-like pattern
             // We use a thread-local to avoid leaking.
@@ -387,7 +387,7 @@ impl<'a, M> EventCtx<'a, M> {
     }
 
     /// Get or create mutable persistent state for this widget.
-    pub fn state_mut<T: Default + Send + Sync + 'static>(&mut self) -> &mut T {
+    pub fn state_mut<T: Default + 'static>(&mut self) -> &mut T {
         self.store.get_or_default::<T>(self.path.clone())
     }
 
@@ -484,7 +484,7 @@ impl<'a, M> EventCtx<'a, M> {
 /// not inside widget instances.
 #[derive(Default)]
 pub struct WidgetStore {
-    states: HashMap<WidgetPath, Box<dyn Any + Send + Sync>>,
+    states: HashMap<WidgetPath, Box<dyn Any>>,
 }
 
 impl WidgetStore {
@@ -498,10 +498,7 @@ impl WidgetStore {
     }
 
     /// Get or insert a default state for the given path.
-    pub fn get_or_default<T: Default + Send + Sync + 'static>(
-        &mut self,
-        path: WidgetPath,
-    ) -> &mut T {
+    pub fn get_or_default<T: Default + 'static>(&mut self, path: WidgetPath) -> &mut T {
         self.states
             .entry(path)
             .or_insert_with(|| Box::new(T::default()))

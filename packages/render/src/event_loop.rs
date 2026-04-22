@@ -84,11 +84,11 @@ pub struct EventLoop<T> {
 
 impl<T> EventLoop<T>
 where
-    T: DrawUpdate + Send + Sync + 'static,
+    T: DrawUpdate,
 {
     pub(super) fn from_builder(builder: &Builder, thing: T) -> Self
     where
-        T: DrawUpdate + Send + Sync + 'static,
+        T: DrawUpdate,
     {
         Self {
             render: Render::from_builder(builder, thing, stdout()),

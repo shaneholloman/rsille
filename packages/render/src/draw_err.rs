@@ -25,10 +25,6 @@ pub enum DrawErr {
     TerminalSetup(io::Error),
     /// Terminal cleanup operation failed (leave alt screen, disable raw mode, etc.)
     TerminalCleanup(io::Error),
-    /// Thread panicked during execution
-    ThreadPanic(String),
-    /// Channel was closed unexpectedly
-    ChannelClosed,
     /// Failed to create tokio runtime
     RuntimeCreation(io::Error),
     /// IO error during rendering
@@ -69,18 +65,6 @@ impl DrawErr {
             available_width,
             x,
         }
-    }
-
-    /// Create a ThreadPanic error from a panic payload
-    pub fn thread_panic(payload: Box<dyn std::any::Any + Send>) -> Self {
-        let panic_msg = if let Some(s) = payload.downcast_ref::<&str>() {
-            s.to_string()
-        } else if let Some(s) = payload.downcast_ref::<String>() {
-            s.clone()
-        } else {
-            "Thread panicked with unknown payload".to_string()
-        };
-        Self::ThreadPanic(panic_msg)
     }
 
     /// Get detailed context about this error
@@ -139,8 +123,6 @@ impl DrawErr {
             }
             Self::TerminalSetup(err) => format!("Terminal setup failed: {}", err),
             Self::TerminalCleanup(err) => format!("Terminal cleanup failed: {}", err),
-            Self::ThreadPanic(msg) => format!("Thread panicked: {}", msg),
-            Self::ChannelClosed => "Communication channel closed unexpectedly".to_string(),
             Self::RuntimeCreation(err) => format!("Failed to create tokio runtime: {}", err),
             Self::Io(err) => format!("IO error: {}", err),
         }
@@ -218,8 +200,6 @@ impl std::fmt::Display for DrawErr {
             }
             DrawErr::TerminalSetup(err) => write!(f, "Terminal setup failed: {}", err),
             DrawErr::TerminalCleanup(err) => write!(f, "Terminal cleanup failed: {}", err),
-            DrawErr::ThreadPanic(msg) => write!(f, "Thread panicked: {}", msg),
-            DrawErr::ChannelClosed => write!(f, "Communication channel closed unexpectedly"),
             DrawErr::RuntimeCreation(err) => write!(f, "Failed to create tokio runtime: {}", err),
             DrawErr::Io(err) => write!(f, "IO error: {}", err),
         }

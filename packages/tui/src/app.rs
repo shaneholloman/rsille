@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crossterm::event::Event;
@@ -15,10 +14,9 @@ use crate::widget::{
 use crate::widgets::text_input::TextInputState;
 use crate::WidgetResult;
 
-pub type EventHandler<M> = Arc<dyn Fn() -> M + Send + Sync>;
-pub type FrameHandler<M> = Arc<dyn Fn(FrameInfo) -> M + Send + Sync>;
+pub type EventHandler<M> = Box<dyn Fn() -> M>;
+pub type FrameHandler<M> = Box<dyn Fn(FrameInfo) -> M>;
 
-#[derive(Clone)]
 struct TickConfig<M> {
     interval: Duration,
     handler: EventHandler<M>,
@@ -30,7 +28,6 @@ struct TickRuntime<M> {
     handler: EventHandler<M>,
 }
 
-#[derive(Clone)]
 struct FrameConfig<M> {
     handler: FrameHandler<M>,
 }
@@ -115,7 +112,7 @@ impl<State: std::fmt::Debug, M> std::fmt::Debug for App<State, M> {
     }
 }
 
-impl<State, M: Clone + std::fmt::Debug + Send + Sync + 'static> App<State, M> {
+impl<State, M: Clone + std::fmt::Debug + 'static> App<State, M> {
     pub fn new(state: State) -> Self {
         Self {
             state,
@@ -129,9 +126,9 @@ impl<State, M: Clone + std::fmt::Debug + Send + Sync + 'static> App<State, M> {
     /// Register a global keyboard shortcut.
     pub fn on_key<F>(mut self, key: KeyCode, handler: F) -> Self
     where
-        F: Fn() -> M + Send + Sync + 'static,
+        F: Fn() -> M + 'static,
     {
-        self.global_key_handlers.insert(key, Arc::new(handler));
+        self.global_key_handlers.insert(key, Box::new(handler));
         self
     }
 
@@ -141,7 +138,7 @@ impl<State, M: Clone + std::fmt::Debug + Send + Sync + 'static> App<State, M> {
     /// not cause a backlog of timer messages.
     pub fn on_tick<F>(mut self, interval: Duration, handler: F) -> Self
     where
-        F: Fn() -> M + Send + Sync + 'static,
+        F: Fn() -> M + 'static,
     {
         let interval = if interval.is_zero() {
             Duration::from_millis(1)
@@ -150,7 +147,7 @@ impl<State, M: Clone + std::fmt::Debug + Send + Sync + 'static> App<State, M> {
         };
         self.tick_handlers.push(TickConfig {
             interval,
-            handler: Arc::new(handler),
+            handler: Box::new(handler),
         });
         self
     }
@@ -161,10 +158,10 @@ impl<State, M: Clone + std::fmt::Debug + Send + Sync + 'static> App<State, M> {
     /// receives real frame timing data.
     pub fn on_frame<F>(mut self, handler: F) -> Self
     where
-        F: Fn(FrameInfo) -> M + Send + Sync + 'static,
+        F: Fn(FrameInfo) -> M + 'static,
     {
         self.frame_handlers.push(FrameConfig {
-            handler: Arc::new(handler),
+            handler: Box::new(handler),
         });
         self
     }
@@ -190,10 +187,9 @@ impl<State, M: Clone + std::fmt::Debug + Send + Sync + 'static> App<State, M> {
     /// Run the application in full-screen mode.
     pub fn run<F, V, W>(self, update: F, view: V) -> WidgetResult<()>
     where
-        F: Fn(&mut State, M) + Send + Sync + 'static,
-        V: Fn(&State) -> W + Send + Sync + 'static,
+        F: Fn(&mut State, M),
+        V: Fn(&State) -> W,
         W: Widget<M> + 'static,
-        State: Send + Sync + 'static,
     {
         let view_fn = move |state: &State| -> Box<dyn Widget<M>> { Box::new(view(state)) };
         self.run_with_options(update, view_fn, false)
@@ -202,10 +198,9 @@ impl<State, M: Clone + std::fmt::Debug + Send + Sync + 'static> App<State, M> {
     /// Run the application in inline (non-fullscreen) mode.
     pub fn run_inline<F, V, W>(self, update: F, view: V) -> WidgetResult<()>
     where
-        F: Fn(&mut State, M) + Send + Sync + 'static,
-        V: Fn(&State) -> W + Send + Sync + 'static,
+        F: Fn(&mut State, M),
+        V: Fn(&State) -> W,
         W: Widget<M> + 'static,
-        State: Send + Sync + 'static,
     {
         let view_fn = move |state: &State| -> Box<dyn Widget<M>> { Box::new(view(state)) };
         self.run_with_options(update, view_fn, true)
@@ -213,9 +208,8 @@ impl<State, M: Clone + std::fmt::Debug + Send + Sync + 'static> App<State, M> {
 
     fn run_with_options<F, V>(self, update: F, view: V, inline_mode: bool) -> WidgetResult<()>
     where
-        F: Fn(&mut State, M) + Send + Sync + 'static,
-        V: Fn(&State) -> Box<dyn Widget<M>> + Send + Sync + 'static,
-        State: Send + Sync + 'static,
+        F: Fn(&mut State, M),
+        V: Fn(&State) -> Box<dyn Widget<M>>,
     {
         let (width, height) = crossterm::terminal::size()?;
         let inline_max_height: u16 = 50;
@@ -228,17 +222,16 @@ impl<State, M: Clone + std::fmt::Debug + Send + Sync + 'static> App<State, M> {
         } else {
             (height, height)
         };
-
-        // Build global key handler map (Box instead of Arc for EventRouter)
-        let mut global_handlers: HashMap<KeyCode, Box<dyn Fn() -> M + Send + Sync>> =
-            HashMap::new();
-        for (key, handler) in &self.global_key_handlers {
-            let h = handler.clone();
-            global_handlers.insert(*key, Box::new(move || h()));
-        }
+        let App {
+            state,
+            global_key_handlers,
+            tick_handlers,
+            frame_handlers,
+            quit_behavior,
+        } = self;
 
         let runtime = AppRuntime {
-            state: self.state,
+            state,
             update_fn: update,
             view_fn: view,
             store: WidgetStore::new(),
@@ -246,10 +239,9 @@ impl<State, M: Clone + std::fmt::Debug + Send + Sync + 'static> App<State, M> {
             cached_tree: None,
             messages: Vec::new(),
             should_quit: false,
-            quit_behavior: self.quit_behavior,
-            global_key_handlers: global_handlers,
-            tick_handlers: self
-                .tick_handlers
+            quit_behavior,
+            global_key_handlers,
+            tick_handlers: tick_handlers
                 .into_iter()
                 .map(|tick| TickRuntime {
                     interval: tick.interval,
@@ -257,8 +249,7 @@ impl<State, M: Clone + std::fmt::Debug + Send + Sync + 'static> App<State, M> {
                     handler: tick.handler,
                 })
                 .collect(),
-            frame_handlers: self
-                .frame_handlers
+            frame_handlers: frame_handlers
                 .into_iter()
                 .map(|frame| frame.handler)
                 .collect(),
@@ -313,7 +304,7 @@ struct AppRuntime<State, F, V, M> {
     messages: Vec<M>,
     should_quit: bool,
     quit_behavior: QuitBehavior,
-    global_key_handlers: HashMap<KeyCode, Box<dyn Fn() -> M + Send + Sync>>,
+    global_key_handlers: HashMap<KeyCode, Box<dyn Fn() -> M>>,
     tick_handlers: Vec<TickRuntime<M>>,
     frame_handlers: Vec<FrameHandler<M>>,
     frame_runtime: FrameRuntime,
@@ -544,7 +535,7 @@ impl<State, F, V, M> Update for AppRuntime<State, F, V, M>
 where
     F: Fn(&mut State, M),
     V: Fn(&State) -> Box<dyn Widget<M>>,
-    M: Clone + std::fmt::Debug + 'static,
+    M: Clone + std::fmt::Debug,
 {
     fn on_events(&mut self, events: &[Event]) -> Result<(), DrawErr> {
         // Reset TextInputState.modified_this_batch so we sync from parent when value differs
