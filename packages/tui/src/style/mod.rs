@@ -5,14 +5,12 @@ mod css;
 mod error;
 mod padding;
 mod theme;
-mod theme_manager;
 
 pub use border::{BorderChars, BorderStyle};
 pub use padding::Padding;
 
 pub use error::CssError;
 pub use theme::{Theme, ThemeBuilder, ThemeColors, ThemeStyles};
-pub use theme_manager::ThemeManager;
 
 /// Widget style configuration (visual properties only)
 ///

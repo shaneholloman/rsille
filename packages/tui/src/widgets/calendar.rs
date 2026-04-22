@@ -4,7 +4,7 @@ use crate::event::{Event, KeyCode};
 use crate::focus::FocusConfig;
 use crate::layout::border_renderer;
 use crate::layout::Constraints;
-use crate::style::{BorderStyle, Style, ThemeManager};
+use crate::style::{BorderStyle, Style};
 use crate::widget::{EventCtx, EventPhase, RenderCtx, Widget};
 
 /// A simple date value used by the calendar widget.
@@ -149,13 +149,12 @@ impl<M: 'static> Widget<M> for Calendar<M> {
         }
 
         let is_focused = ctx.is_focused();
-        let base_style = ThemeManager::global().with_theme(|theme| {
-            if self.disabled {
-                theme.styles.interactive_disabled
-            } else {
-                theme.styles.surface_elevated
-            }
-        });
+        let theme = ctx.theme();
+        let base_style = if self.disabled {
+            theme.styles.interactive_disabled
+        } else {
+            theme.styles.surface_elevated
+        };
         let base_render_style = self
             .custom_style
             .as_ref()
@@ -164,35 +163,28 @@ impl<M: 'static> Widget<M> for Calendar<M> {
             .to_render_style();
         let selected_style = if is_focused {
             self.custom_focus_style.unwrap_or_else(|| {
-                ThemeManager::global().with_theme(|theme| {
-                    Style::default()
-                        .fg(theme.colors.text)
-                        .bg(theme.colors.focus_background)
-                        .bold()
-                })
+                Style::default()
+                    .fg(theme.colors.text)
+                    .bg(theme.colors.focus_background)
+                    .bold()
             })
         } else {
-            ThemeManager::global().with_theme(|theme| theme.styles.selected)
+            theme.styles.selected
         }
         .to_render_style();
-        let header_style = ThemeManager::global().with_theme(|theme| {
+        let header_style = Style::default()
+            .fg(theme.colors.text)
+            .bg(theme.colors.surface)
+            .bold()
+            .to_render_style();
+        let muted_style = theme.styles.text_muted.to_render_style();
+        let border_style = if is_focused {
             Style::default()
-                .fg(theme.colors.text)
-                .bg(theme.colors.surface)
-                .bold()
+                .fg(theme.colors.focus_ring)
                 .to_render_style()
-        });
-        let muted_style =
-            ThemeManager::global().with_theme(|theme| theme.styles.text_muted.to_render_style());
-        let border_style = ThemeManager::global().with_theme(|theme| {
-            if is_focused {
-                Style::default()
-                    .fg(theme.colors.focus_ring)
-                    .to_render_style()
-            } else {
-                Style::default().fg(theme.colors.border).to_render_style()
-            }
-        });
+        } else {
+            Style::default().fg(theme.colors.border).to_render_style()
+        };
 
         let _ = chunk.fill(0, 0, area.width(), area.height(), ' ', base_render_style);
 

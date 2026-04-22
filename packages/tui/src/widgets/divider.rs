@@ -2,7 +2,7 @@
 
 use crate::event::Event;
 use crate::layout::Constraints;
-use crate::style::{BorderStyle, Style, ThemeManager};
+use crate::style::{BorderStyle, Style};
 use crate::widget::{EventCtx, RenderCtx, Widget};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -201,14 +201,13 @@ impl<M> Default for Divider<M> {
 }
 
 impl<M> Widget<M> for Divider<M> {
-    fn render(&self, chunk: &mut render::chunk::Chunk, _ctx: &RenderCtx) {
+    fn render(&self, chunk: &mut render::chunk::Chunk, ctx: &RenderCtx) {
         let area = chunk.area();
         if area.width() == 0 || area.height() == 0 {
             return;
         }
 
-        let theme_style =
-            ThemeManager::global().with_theme(|theme| Style::default().fg(theme.colors.border));
+        let theme_style = Style::default().fg(ctx.theme().colors.border);
         let final_style = self.style.merge(theme_style);
         let render_style = final_style.to_render_style();
         let (h_char, v_char) = self.variant.chars();

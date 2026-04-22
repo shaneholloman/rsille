@@ -6,7 +6,7 @@ use crate::event::{Event, KeyCode};
 use crate::focus::FocusConfig;
 use crate::layout::border_renderer;
 use crate::layout::Constraints;
-use crate::style::{BorderStyle, Style, ThemeManager};
+use crate::style::{BorderStyle, Style};
 use crate::widget::{EventCtx, EventPhase, RenderCtx, Widget};
 
 /// A single list item.
@@ -251,24 +251,20 @@ impl<M: 'static> Widget<M> for List<M> {
         }
 
         let is_focused = ctx.is_focused();
-        let base_style = ThemeManager::global().with_theme(|theme| {
-            if self.disabled {
-                theme.styles.interactive_disabled
-            } else {
-                theme.styles.surface
-            }
-        });
-        let active_style = if is_focused {
-            self.custom_focus_style.unwrap_or_else(|| {
-                ThemeManager::global().with_theme(|theme| theme.styles.interactive_focused)
-            })
+        let theme = ctx.theme();
+        let base_style = if self.disabled {
+            theme.styles.interactive_disabled
         } else {
-            ThemeManager::global().with_theme(|theme| {
-                Style::default()
-                    .fg(theme.colors.text)
-                    .bg(theme.colors.focus_background)
-                    .bold()
-            })
+            theme.styles.surface
+        };
+        let active_style = if is_focused {
+            self.custom_focus_style
+                .unwrap_or(theme.styles.interactive_focused)
+        } else {
+            Style::default()
+                .fg(theme.colors.text)
+                .bg(theme.colors.focus_background)
+                .bold()
         };
         let row_style = self
             .custom_style
@@ -277,17 +273,14 @@ impl<M: 'static> Widget<M> for List<M> {
             .unwrap_or(base_style)
             .to_render_style();
         let active_row_style = active_style.to_render_style();
-        let disabled_row_style = ThemeManager::global()
-            .with_theme(|theme| theme.styles.interactive_disabled.to_render_style());
-        let border_style = ThemeManager::global().with_theme(|theme| {
-            if is_focused {
-                Style::default()
-                    .fg(theme.colors.focus_ring)
-                    .to_render_style()
-            } else {
-                Style::default().fg(theme.colors.border).to_render_style()
-            }
-        });
+        let disabled_row_style = theme.styles.interactive_disabled.to_render_style();
+        let border_style = if is_focused {
+            Style::default()
+                .fg(theme.colors.focus_ring)
+                .to_render_style()
+        } else {
+            Style::default().fg(theme.colors.border).to_render_style()
+        };
 
         let _ = chunk.fill(0, 0, area.width(), area.height(), ' ', row_style);
 

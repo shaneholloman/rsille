@@ -8,6 +8,7 @@ use smallvec::SmallVec;
 use crate::event::Event;
 use crate::focus::FocusConfig;
 use crate::layout::Constraints;
+use crate::style::Theme;
 
 // ---------------------------------------------------------------------------
 // WidgetKey & WidgetPath – stable widget identity
@@ -224,20 +225,32 @@ impl<M> Widget<M> for Box<dyn Widget<M>> {
 
 /// Context passed to [`Widget::render`].
 ///
-/// Provides read-only access to the [`WidgetStore`] and focus information.
+/// Provides read-only access to the [`WidgetStore`], focus information,
+/// and the current render theme.
 pub struct RenderCtx<'a> {
     store: &'a WidgetStore,
+    theme: &'a Theme,
     focused_path: Option<&'a WidgetPath>,
     current_path: WidgetPath,
 }
 
 impl<'a> RenderCtx<'a> {
-    pub fn new(store: &'a WidgetStore, focused_path: Option<&'a WidgetPath>) -> Self {
+    pub fn new(
+        store: &'a WidgetStore,
+        theme: &'a Theme,
+        focused_path: Option<&'a WidgetPath>,
+    ) -> Self {
         Self {
             store,
+            theme,
             focused_path,
             current_path: WidgetPath::root(),
         }
+    }
+
+    /// The theme for the current render pass.
+    pub fn theme(&self) -> &Theme {
+        self.theme
     }
 
     /// Whether the current widget has keyboard focus.
@@ -310,6 +323,7 @@ impl<'a> RenderCtx<'a> {
     pub fn child_ctx(&self, key: impl Into<WidgetKey>) -> RenderCtx<'a> {
         RenderCtx {
             store: self.store,
+            theme: self.theme,
             focused_path: self.focused_path,
             current_path: self.current_path.child(key),
         }

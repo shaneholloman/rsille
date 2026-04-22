@@ -2,7 +2,7 @@
 
 use crate::event::Event;
 use crate::layout::Constraints;
-use crate::style::{Color, Style, ThemeManager};
+use crate::style::{Color, Style};
 use crate::widget::{EventCtx, RenderCtx, Widget};
 
 /// Label widget for displaying text.
@@ -65,12 +65,12 @@ impl<M> Label<M> {
 }
 
 impl<M> Widget<M> for Label<M> {
-    fn render(&self, chunk: &mut render::chunk::Chunk, _ctx: &RenderCtx) {
+    fn render(&self, chunk: &mut render::chunk::Chunk, ctx: &RenderCtx) {
         let area = chunk.area();
         if area.width() == 0 || area.height() == 0 {
             return;
         }
-        let theme_style = ThemeManager::global().with_theme(|theme| theme.styles.text);
+        let theme_style = ctx.theme().styles.text;
         let final_style = self.style.merge(theme_style);
         let _ = chunk.set_string(0, 0, &self.content, final_style.to_render_style());
     }

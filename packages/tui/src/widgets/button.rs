@@ -3,7 +3,7 @@
 use crate::event::{Event, KeyCode};
 use crate::focus::FocusConfig;
 use crate::layout::Constraints;
-use crate::style::{Color, Style, ThemeManager};
+use crate::style::{Color, Style, Theme};
 use crate::widget::{EventCtx, EventPhase, RenderCtx, Widget};
 
 /// Button style variants.
@@ -73,53 +73,51 @@ impl<M> Button<M> {
         self
     }
 
-    fn compute_style(&self, is_focused: bool) -> Style {
-        ThemeManager::global().with_theme(|theme| {
-            if self.disabled {
-                return theme.styles.disabled;
-            }
-            match self.variant {
-                ButtonVariant::Primary => {
-                    if is_focused {
-                        theme.styles.primary_action_focused
-                    } else {
-                        theme.styles.primary_action
-                    }
-                }
-                ButtonVariant::Secondary => {
-                    if is_focused {
-                        theme.styles.secondary_action_focused
-                    } else {
-                        theme.styles.secondary_action
-                    }
-                }
-                ButtonVariant::Ghost => {
-                    if is_focused {
-                        theme.styles.interactive_focused
-                    } else {
-                        Style::default().fg(theme.colors.text)
-                    }
-                }
-                ButtonVariant::Link => {
-                    let base = if is_focused {
-                        theme.styles.interactive_focused
-                    } else {
-                        theme.styles.text
-                    };
-                    base.underlined()
-                }
-                ButtonVariant::Destructive => {
-                    if is_focused {
-                        Style::default()
-                            .fg(Color::White)
-                            .bg(theme.colors.danger)
-                            .bold()
-                    } else {
-                        Style::default().fg(Color::White).bg(theme.colors.danger)
-                    }
+    fn compute_style(&self, theme: &Theme, is_focused: bool) -> Style {
+        if self.disabled {
+            return theme.styles.disabled;
+        }
+        match self.variant {
+            ButtonVariant::Primary => {
+                if is_focused {
+                    theme.styles.primary_action_focused
+                } else {
+                    theme.styles.primary_action
                 }
             }
-        })
+            ButtonVariant::Secondary => {
+                if is_focused {
+                    theme.styles.secondary_action_focused
+                } else {
+                    theme.styles.secondary_action
+                }
+            }
+            ButtonVariant::Ghost => {
+                if is_focused {
+                    theme.styles.interactive_focused
+                } else {
+                    Style::default().fg(theme.colors.text)
+                }
+            }
+            ButtonVariant::Link => {
+                let base = if is_focused {
+                    theme.styles.interactive_focused
+                } else {
+                    theme.styles.text
+                };
+                base.underlined()
+            }
+            ButtonVariant::Destructive => {
+                if is_focused {
+                    Style::default()
+                        .fg(Color::White)
+                        .bg(theme.colors.danger)
+                        .bold()
+                } else {
+                    Style::default().fg(Color::White).bg(theme.colors.danger)
+                }
+            }
+        }
     }
 }
 
@@ -131,7 +129,8 @@ impl<M> Widget<M> for Button<M> {
         }
 
         let is_focused = ctx.is_focused();
-        let style = self.compute_style(is_focused);
+        let theme = ctx.theme();
+        let style = self.compute_style(theme, is_focused);
         let render_style = style.to_render_style();
 
         let width = area.width();
@@ -147,15 +146,13 @@ impl<M> Widget<M> for Button<M> {
 
         // Border for Ghost variant
         if matches!(self.variant, ButtonVariant::Ghost) {
-            let border_style = ThemeManager::global().with_theme(|theme| {
-                if is_focused {
-                    Style::default()
-                        .fg(theme.colors.focus_ring)
-                        .to_render_style()
-                } else {
-                    Style::default().fg(theme.colors.border).to_render_style()
-                }
-            });
+            let border_style = if is_focused {
+                Style::default()
+                    .fg(theme.colors.focus_ring)
+                    .to_render_style()
+            } else {
+                Style::default().fg(theme.colors.border).to_render_style()
+            };
             use crate::layout::border_renderer;
             use crate::style::BorderStyle;
             border_renderer::render_border(chunk, BorderStyle::Single, border_style);

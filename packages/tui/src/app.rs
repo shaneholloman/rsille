@@ -8,6 +8,7 @@ use render::{Draw, DrawErr, Update};
 
 use crate::event::{KeyCode, KeyEvent, KeyModifiers};
 use crate::focus::FocusManager;
+use crate::style::Theme;
 use crate::widget::{
     EventCtx, EventPhase, FocusRequest, RenderCtx, Widget, WidgetKey, WidgetPath, WidgetStore,
 };
@@ -97,6 +98,7 @@ pub enum QuitBehavior {
 /// Application builder. Create with [`App::new`], configure, then call `.run()`.
 pub struct App<State, M = ()> {
     state: State,
+    theme: Theme,
     global_key_handlers: HashMap<KeyCode, EventHandler<M>>,
     tick_handlers: Vec<TickConfig<M>>,
     frame_handlers: Vec<FrameConfig<M>>,
@@ -116,11 +118,18 @@ impl<State, M: Clone + std::fmt::Debug + 'static> App<State, M> {
     pub fn new(state: State) -> Self {
         Self {
             state,
+            theme: Theme::dark(),
             global_key_handlers: HashMap::new(),
             tick_handlers: Vec::new(),
             frame_handlers: Vec::new(),
             quit_behavior: QuitBehavior::default(),
         }
+    }
+
+    /// Configure the theme used for rendering.
+    pub fn with_theme(mut self, theme: Theme) -> Self {
+        self.theme = theme;
+        self
     }
 
     /// Register a global keyboard shortcut.
@@ -224,6 +233,7 @@ impl<State, M: Clone + std::fmt::Debug + 'static> App<State, M> {
         };
         let App {
             state,
+            theme,
             global_key_handlers,
             tick_handlers,
             frame_handlers,
@@ -232,6 +242,7 @@ impl<State, M: Clone + std::fmt::Debug + 'static> App<State, M> {
 
         let runtime = AppRuntime {
             state,
+            theme,
             update_fn: update,
             view_fn: view,
             store: WidgetStore::new(),
@@ -296,6 +307,7 @@ impl<State, M: Clone + std::fmt::Debug + 'static> App<State, M> {
 
 struct AppRuntime<State, F, V, M> {
     state: State,
+    theme: Theme,
     update_fn: F,
     view_fn: V,
     store: WidgetStore,
@@ -521,7 +533,7 @@ where
 
         // Render
         let focused_path = self.focus.current_path();
-        let ctx = RenderCtx::new(&self.store, focused_path);
+        let ctx = RenderCtx::new(&self.store, &self.theme, focused_path);
         tree.render(&mut chunk, &ctx);
 
         // Cache tree for event handling in on_events()

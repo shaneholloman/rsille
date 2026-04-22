@@ -8,7 +8,7 @@ use crate::event::{Event, KeyCode, KeyEvent, KeyModifiers};
 use crate::focus::FocusConfig;
 use crate::layout::border_renderer;
 use crate::layout::Constraints;
-use crate::style::{BorderStyle, Style, ThemeManager};
+use crate::style::{BorderStyle, Style, Theme};
 use crate::widget::{EventCtx, EventPhase, RenderCtx, Widget};
 
 /// Text input style variants.
@@ -135,16 +135,14 @@ impl<M> TextInput<M> {
         self
     }
 
-    fn compute_style(&self, is_focused: bool) -> Style {
-        let base_style = ThemeManager::global().with_theme(|theme| {
-            if self.disabled {
-                theme.styles.interactive_disabled
-            } else if is_focused {
-                theme.styles.interactive_focused
-            } else {
-                theme.styles.interactive
-            }
-        });
+    fn compute_style(&self, theme: &Theme, is_focused: bool) -> Style {
+        let base_style = if self.disabled {
+            theme.styles.interactive_disabled
+        } else if is_focused {
+            theme.styles.interactive_focused
+        } else {
+            theme.styles.interactive
+        };
 
         if is_focused {
             if let Some(ref focus_style) = self.custom_focus_style {
@@ -176,28 +174,25 @@ impl<M: 'static> Widget<M> for TextInput<M> {
         }
 
         let is_focused = ctx.is_focused();
-        let style = self.compute_style(is_focused);
+        let theme = ctx.theme();
+        let style = self.compute_style(theme, is_focused);
         let render_style = style.to_render_style();
 
         // Single theme lookup for all theme-dependent styles
-        let (border_style, placeholder_style, cursor_style) =
-            ThemeManager::global().with_theme(|theme| {
-                let border = if is_focused {
-                    Style::default()
-                        .fg(theme.colors.focus_ring)
-                        .to_render_style()
-                } else {
-                    Style::default().fg(theme.colors.border).to_render_style()
-                };
-                let placeholder = Style::default()
-                    .fg(theme.colors.text_muted)
-                    .to_render_style();
-                let cursor = Style::default()
-                    .fg(theme.colors.background)
-                    .bg(theme.colors.text)
-                    .to_render_style();
-                (border, placeholder, cursor)
-            });
+        let border_style = if is_focused {
+            Style::default()
+                .fg(theme.colors.focus_ring)
+                .to_render_style()
+        } else {
+            Style::default().fg(theme.colors.border).to_render_style()
+        };
+        let placeholder_style = Style::default()
+            .fg(theme.colors.text_muted)
+            .to_render_style();
+        let cursor_style = Style::default()
+            .fg(theme.colors.background)
+            .bg(theme.colors.text)
+            .to_render_style();
 
         match self.variant {
             TextInputVariant::Default | TextInputVariant::Password => {

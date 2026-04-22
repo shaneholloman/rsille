@@ -7,7 +7,7 @@ use super::taffy_bridge::TaffyBridge;
 use crate::event::Event;
 use crate::focus::{FocusConfig, FocusScope};
 use crate::layout::Constraints;
-use crate::style::{BorderStyle, Padding, Style, ThemeManager};
+use crate::style::{BorderStyle, Padding, Style};
 use crate::widget::{EventCtx, IntoWidget, RenderCtx, Widget, WidgetKey};
 use taffy::style::{AlignItems, JustifyContent};
 
@@ -174,7 +174,7 @@ impl<M> Widget<M> for Flex<M> {
             return;
         }
 
-        let theme_style = ThemeManager::global().with_theme(|theme| theme.styles.surface);
+        let theme_style = ctx.theme().styles.surface;
         let final_style = self.style.merge(theme_style);
         let render_style = final_style.to_render_style();
 

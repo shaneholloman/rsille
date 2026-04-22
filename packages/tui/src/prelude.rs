@@ -8,7 +8,7 @@ pub use crate::layout::{
     col, grid, row, AlignItems, Constraints, Direction, Flex, Grid, GridLine, GridPlacement,
     GridTrack, JustifyContent,
 };
-pub use crate::style::{BorderStyle, Color, Padding, Style, ThemeManager};
+pub use crate::style::{BorderStyle, Color, Padding, Style, Theme};
 pub use crate::widget::{
     EventCtx, EventPhase, FocusRequest, IntoWidget, RenderCtx, Widget, WidgetKey, WidgetPath,
     WidgetStore,
