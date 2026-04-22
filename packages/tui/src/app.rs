@@ -16,6 +16,7 @@ use crate::widgets::text_input::TextInputState;
 use crate::WidgetResult;
 
 pub type EventHandler<M> = Arc<dyn Fn() -> M + Send + Sync>;
+pub type FrameHandler<M> = Arc<dyn Fn(FrameInfo) -> M + Send + Sync>;
 
 #[derive(Clone)]
 struct TickConfig<M> {
@@ -27,6 +28,55 @@ struct TickRuntime<M> {
     interval: Duration,
     next_fire_at: Instant,
     handler: EventHandler<M>,
+}
+
+#[derive(Clone)]
+struct FrameConfig<M> {
+    handler: FrameHandler<M>,
+}
+
+/// Timing information for a rendered frame.
+#[derive(Debug, Clone, Copy)]
+pub struct FrameInfo {
+    pub now: Instant,
+    pub delta: Duration,
+    pub since_start: Duration,
+    pub frame: u64,
+}
+
+#[derive(Debug)]
+struct FrameRuntime {
+    started_at: Option<Instant>,
+    last_frame_at: Option<Instant>,
+    frame: u64,
+}
+
+impl FrameRuntime {
+    fn new() -> Self {
+        Self {
+            started_at: None,
+            last_frame_at: None,
+            frame: 0,
+        }
+    }
+
+    fn next(&mut self, now: Instant) -> FrameInfo {
+        let started_at = *self.started_at.get_or_insert(now);
+        let delta = self
+            .last_frame_at
+            .map(|last| now.saturating_duration_since(last))
+            .unwrap_or(Duration::ZERO);
+        let info = FrameInfo {
+            now,
+            delta,
+            since_start: now.saturating_duration_since(started_at),
+            frame: self.frame,
+        };
+
+        self.last_frame_at = Some(now);
+        self.frame = self.frame.wrapping_add(1);
+        info
+    }
 }
 
 /// Quit key configuration for the application.
@@ -52,6 +102,7 @@ pub struct App<State, M = ()> {
     state: State,
     global_key_handlers: HashMap<KeyCode, EventHandler<M>>,
     tick_handlers: Vec<TickConfig<M>>,
+    frame_handlers: Vec<FrameConfig<M>>,
     quit_behavior: QuitBehavior,
 }
 
@@ -70,6 +121,7 @@ impl<State, M: Clone + std::fmt::Debug + Send + Sync + 'static> App<State, M> {
             state,
             global_key_handlers: HashMap::new(),
             tick_handlers: Vec::new(),
+            frame_handlers: Vec::new(),
             quit_behavior: QuitBehavior::default(),
         }
     }
@@ -98,6 +150,20 @@ impl<State, M: Clone + std::fmt::Debug + Send + Sync + 'static> App<State, M> {
         };
         self.tick_handlers.push(TickConfig {
             interval,
+            handler: Arc::new(handler),
+        });
+        self
+    }
+
+    /// Register a callback that runs once per frame.
+    ///
+    /// This is a good fit for time-based animation because the callback
+    /// receives real frame timing data.
+    pub fn on_frame<F>(mut self, handler: F) -> Self
+    where
+        F: Fn(FrameInfo) -> M + Send + Sync + 'static,
+    {
+        self.frame_handlers.push(FrameConfig {
             handler: Arc::new(handler),
         });
         self
@@ -191,6 +257,12 @@ impl<State, M: Clone + std::fmt::Debug + Send + Sync + 'static> App<State, M> {
                     handler: tick.handler,
                 })
                 .collect(),
+            frame_handlers: self
+                .frame_handlers
+                .into_iter()
+                .map(|frame| frame.handler)
+                .collect(),
+            frame_runtime: FrameRuntime::new(),
             inline_mode,
             inline_max_height,
         };
@@ -243,6 +315,8 @@ struct AppRuntime<State, F, V, M> {
     quit_behavior: QuitBehavior,
     global_key_handlers: HashMap<KeyCode, Box<dyn Fn() -> M + Send + Sync>>,
     tick_handlers: Vec<TickRuntime<M>>,
+    frame_handlers: Vec<FrameHandler<M>>,
+    frame_runtime: FrameRuntime,
     inline_mode: bool,
     inline_max_height: u16,
 }
@@ -422,6 +496,19 @@ impl<State, F, V, M> AppRuntime<State, F, V, M> {
 
         fired
     }
+
+    fn queue_frame_messages(&mut self) -> bool {
+        if self.frame_handlers.is_empty() {
+            return false;
+        }
+
+        let info = self.frame_runtime.next(Instant::now());
+        for handler in &self.frame_handlers {
+            self.messages.push(handler(info));
+        }
+
+        true
+    }
 }
 
 impl<State, F, V, M> Draw for AppRuntime<State, F, V, M>
@@ -532,6 +619,7 @@ where
 
     fn update(&mut self) -> Result<bool, DrawErr> {
         self.queue_tick_messages();
+        self.queue_frame_messages();
 
         let had_messages = !self.messages.is_empty();
         for msg in self.messages.drain(..) {

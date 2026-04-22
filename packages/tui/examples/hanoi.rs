@@ -40,6 +40,9 @@ struct State {
     finished_at: Option<Instant>,
     cycle: usize,
     last_move: Option<LastMove>,
+    last_tick_at: Option<Instant>,
+    last_tick_ms: Option<f64>,
+    avg_tick_ms: Option<f64>,
 }
 
 impl State {
@@ -52,10 +55,15 @@ impl State {
             finished_at: None,
             cycle: 1,
             last_move: None,
+            last_tick_at: None,
+            last_tick_ms: None,
+            avg_tick_ms: None,
         }
     }
 
     fn tick(&mut self, now: Instant) {
+        self.record_tick(now);
+
         if let Some(finished_at) = self.finished_at {
             if now.duration_since(finished_at) >= RESET_DELAY {
                 self.reset(now);
@@ -121,6 +129,26 @@ impl State {
             .get(self.next_move)
             .map(|step| format!("Next: {} -> {}", tower_name(step.from), tower_name(step.to)))
             .unwrap_or_else(|| "Next: restart animation".to_owned())
+    }
+
+    fn record_tick(&mut self, now: Instant) {
+        if let Some(last_tick_at) = self.last_tick_at {
+            let tick_ms = now.duration_since(last_tick_at).as_secs_f64() * 1_000.0;
+            self.last_tick_ms = Some(tick_ms);
+            self.avg_tick_ms = Some(match self.avg_tick_ms {
+                Some(avg) => avg * 0.8 + tick_ms * 0.2,
+                None => tick_ms,
+            });
+        }
+
+        self.last_tick_at = Some(now);
+    }
+
+    fn tick_text(&self) -> String {
+        match (self.last_tick_ms, self.avg_tick_ms) {
+            (Some(last), Some(avg)) => format!("{last:.1} ms (avg {avg:.1})"),
+            _ => "warming up".to_owned(),
+        }
     }
 }
 
@@ -219,6 +247,10 @@ fn summary_card(state: &State) -> impl Widget<Msg> {
             .fg(Color::Rgb(120, 220, 190)),
         )
         .child(label(format!("Cycle: {}", state.cycle)).fg(Color::Rgb(155, 169, 180)))
+        .child(
+            label(format!("Tick: {} | target 16 ms", state.tick_text()))
+                .fg(Color::Rgb(120, 220, 190)),
+        )
         .child(label(state.status_text()).fg(Color::Rgb(241, 199, 94)))
         .child(label(state.next_move_text()).fg(Color::Rgb(111, 194, 255)))
         .child(label("Esc quits.").fg(Color::Rgb(155, 169, 180)))

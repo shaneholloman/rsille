@@ -1,6 +1,6 @@
 //! Prelude — import everything you need with `use tui::prelude::*;`
 
-pub use crate::app::{App, QuitBehavior};
+pub use crate::app::{App, FrameInfo, QuitBehavior};
 pub use crate::error::{WidgetError, WidgetResult};
 pub use crate::event::{Event, KeyCode, KeyEvent, KeyModifiers};
 pub use crate::focus::{FocusConfig, FocusScope, ScopeEntry};

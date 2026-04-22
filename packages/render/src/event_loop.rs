@@ -1,7 +1,8 @@
 use std::{
     io::{stdout, Stdout},
+    sync::mpsc,
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use crossterm::{
@@ -10,9 +11,8 @@ use crossterm::{
     execute,
     terminal::{Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen},
 };
-use futures::{FutureExt, StreamExt};
+use futures::StreamExt;
 use log::{error, info, warn};
-use tokio::{select, sync::mpsc};
 
 use crate::{Builder, DrawErr, DrawUpdate, Render};
 
@@ -31,7 +31,6 @@ impl TerminalGuard {
         mouse_capture: bool,
         hide_cursor: bool,
     ) -> Result<Self, DrawErr> {
-        // Setup terminal in the correct order
         if alt_screen {
             execute!(stdout(), EnterAlternateScreen).map_err(DrawErr::TerminalSetup)?;
             execute!(stdout(), Clear(ClearType::All)).map_err(DrawErr::TerminalSetup)?;
@@ -57,8 +56,6 @@ impl TerminalGuard {
 
 impl Drop for TerminalGuard {
     fn drop(&mut self) {
-        // Cleanup in reverse order, ignoring errors since we're in Drop
-        // We use let _ to explicitly ignore errors since there's nothing we can do in Drop
         if self.hide_cursor {
             let _ = execute!(stdout(), Show);
         }
@@ -167,7 +164,6 @@ where
     }
 
     pub fn run(mut self) -> Result<(), DrawErr> {
-        // Create terminal guard first - this will automatically cleanup on drop
         let _guard = TerminalGuard::new(
             self.alt_screen,
             self.raw_mode,
@@ -184,22 +180,16 @@ where
             self.alt_screen
         );
 
-        // In inline mode, capture the current cursor position AFTER enabling raw mode
-        // Raw mode is needed for position() to work properly
         if self.inline_mode {
-            // Get current cursor position
             match position() {
                 Ok((x, y)) => {
                     self.render.pos = (x, y).into();
-                    // not a newline, move to the next line
                     if x != 0 {
                         execute!(stdout(), MoveToNextLine(1))?;
                         self.render.pos.down(1);
                     }
                 }
                 Err(e) => {
-                    // If we can't get cursor position, use (0, 0) as fallback
-                    // This might happen in non-interactive environments
                     warn!(
                         "Failed to get cursor position in inline mode: {}, using (0, 0)",
                         e
@@ -209,72 +199,71 @@ where
             }
         }
 
-        let (render_tx, render_rx) = mpsc::channel(1);
-        let (event_tx, event_rx) = mpsc::channel(1);
-        let (stop_tx, stop_rx) = std::sync::mpsc::channel();
+        let (event_tx, event_rx) = mpsc::channel();
+        let (stop_tx, stop_rx) = mpsc::channel();
 
-        let event_thread = self.make_event_thread(render_rx, event_tx, stop_tx);
-        let render_thread = self.make_render_thread(render_tx, event_rx, stop_rx);
+        let event_thread = self.make_event_thread(event_tx, stop_tx);
+        let render_thread = self.make_render_thread(event_rx, stop_rx);
 
-        // Join threads and handle panics gracefully
         event_thread.join().map_err(DrawErr::thread_panic)?;
         render_thread.join().map_err(DrawErr::thread_panic)?;
 
-        info!(
-            target: "render::event_loop",
-            "event loop stopped"
-        );
+        info!(target: "render::event_loop", "event loop stopped");
 
-        // Terminal cleanup happens automatically via TerminalGuard's Drop
         Ok(())
     }
 
     fn make_event_thread(
         &self,
-        render_rx: mpsc::Receiver<()>,
-        event_tx: mpsc::Sender<Vec<Event>>,
-        stop_tx: std::sync::mpsc::Sender<()>,
+        event_tx: mpsc::Sender<Event>,
+        stop_tx: mpsc::Sender<()>,
     ) -> thread::JoinHandle<()> {
         let exit_code = self.exit_code;
-        let max_event_per_frame = self.max_event_per_frame;
-        thread::spawn(move || {
-            event_thread(render_rx, event_tx, stop_tx, exit_code, max_event_per_frame)
-        })
+        thread::spawn(move || event_thread(event_tx, stop_tx, exit_code))
     }
 
     fn make_render_thread(
         mut self,
-        render_tx: mpsc::Sender<()>,
-        mut event_rx: mpsc::Receiver<Vec<Event>>,
-        stop_rx: std::sync::mpsc::Receiver<()>,
+        event_rx: mpsc::Receiver<Event>,
+        stop_rx: mpsc::Receiver<()>,
     ) -> thread::JoinHandle<()> {
-        let frame_limit = self.frame_limit.unwrap_or(0);
-        let time_per_frame = if frame_limit > 0 {
-            Duration::from_secs_f64(1.0 / frame_limit as f64)
-        } else {
-            Duration::from_secs(0)
-        };
+        let frame_interval = self
+            .frame_limit
+            .filter(|fps| *fps > 0)
+            .map(|fps| Duration::from_secs_f64(1.0 / fps as f64));
+        let max_event_per_frame = self.max_event_per_frame;
 
         thread::spawn(move || {
-            loop {
-                let now = std::time::Instant::now();
+            let mut pending_initial_frame = true;
+            let mut next_frame_at = Instant::now();
 
-                // check stop signal
+            loop {
                 if stop_rx.try_recv().is_ok() {
                     break;
                 }
 
-                // collect events
-                let events = match event_rx.blocking_recv() {
-                    Some(events) => events,
-                    None => {
-                        // Channel closed, exit gracefully
-                        warn!("Event channel closed, stopping render thread");
+                let mut events = Vec::new();
+                match wait_for_frame_or_event(
+                    &event_rx,
+                    frame_interval,
+                    next_frame_at,
+                    pending_initial_frame,
+                ) {
+                    WaitOutcome::Event(event) => events.push(event),
+                    WaitOutcome::Timeout => {}
+                    WaitOutcome::Disconnected => {
+                        if stop_rx.try_recv().is_err() {
+                            warn!("Event channel closed, stopping render thread");
+                        }
                         break;
                     }
-                };
+                }
 
-                // Check for resize events and update render buffer size
+                drain_pending_events(&event_rx, &mut events, max_event_per_frame);
+
+                pending_initial_frame = false;
+                let frame_started_at = Instant::now();
+
                 for event in &events {
                     if let Event::Resize(width, height) = event {
                         self.render.resize((*width, *height).into());
@@ -292,7 +281,6 @@ where
                     }
                 };
 
-                // Check if application wants to quit
                 if self.render.thing().should_quit() {
                     info!(
                         target: "render::event_loop",
@@ -301,49 +289,84 @@ where
                     break;
                 }
 
-                // Query required size BEFORE rendering
-                // This allows dynamic size adjustment based on current state
                 let current_size = self.render.size();
                 if let Some(new_size) = self.render.thing().required_size(current_size) {
-                    // In inline mode, use set_used_height to avoid buffer reallocation
-                    // Buffer capacity remains constant at inline_max_height
                     if self.inline_mode {
                         self.render.set_used_height(new_size.height);
                     } else {
-                        // In fullscreen mode, do full resize
                         self.render.resize(new_size);
                     }
                 }
 
-                // Only render if there are pending changes
                 if !events.is_empty() || needs_render || self.render.has_pending_changes() {
                     if let Err(e) = self.render.render() {
                         error!("Error rendering: {}", e);
                     }
                 }
 
-                // frame limit
-                let used_time = now.elapsed();
-                if used_time < time_per_frame {
-                    thread::sleep(time_per_frame - used_time);
-                }
+                if let Some(interval) = frame_interval {
+                    if next_frame_at <= frame_started_at {
+                        next_frame_at = frame_started_at + interval;
+                    }
 
-                // Notify event thread we're ready for more events
-                // If send fails, event thread has stopped, so we should stop too
-                if render_tx.blocking_send(()).is_err() {
-                    break;
+                    let finished_at = Instant::now();
+                    while next_frame_at <= finished_at {
+                        next_frame_at += interval;
+                    }
                 }
             }
         })
     }
 }
 
-fn event_thread(
-    mut render_rx: mpsc::Receiver<()>,
-    event_tx: mpsc::Sender<Vec<Event>>,
-    stop_tx: std::sync::mpsc::Sender<()>,
-    exit_code: Option<KeyEvent>,
+enum WaitOutcome {
+    Event(Event),
+    Timeout,
+    Disconnected,
+}
+
+fn wait_for_frame_or_event(
+    event_rx: &mpsc::Receiver<Event>,
+    frame_interval: Option<Duration>,
+    next_frame_at: Instant,
+    pending_initial_frame: bool,
+) -> WaitOutcome {
+    if pending_initial_frame {
+        return WaitOutcome::Timeout;
+    }
+
+    if frame_interval.is_some() {
+        match event_rx.recv_timeout(next_frame_at.saturating_duration_since(Instant::now())) {
+            Ok(event) => WaitOutcome::Event(event),
+            Err(mpsc::RecvTimeoutError::Timeout) => WaitOutcome::Timeout,
+            Err(mpsc::RecvTimeoutError::Disconnected) => WaitOutcome::Disconnected,
+        }
+    } else {
+        match event_rx.recv() {
+            Ok(event) => WaitOutcome::Event(event),
+            Err(_) => WaitOutcome::Disconnected,
+        }
+    }
+}
+
+fn drain_pending_events(
+    event_rx: &mpsc::Receiver<Event>,
+    events: &mut Vec<Event>,
     max_event_per_frame: usize,
+) {
+    while events.len() < max_event_per_frame {
+        match event_rx.try_recv() {
+            Ok(event) => events.push(event),
+            Err(mpsc::TryRecvError::Empty) => break,
+            Err(mpsc::TryRecvError::Disconnected) => break,
+        }
+    }
+}
+
+fn event_thread(
+    event_tx: mpsc::Sender<Event>,
+    stop_tx: mpsc::Sender<()>,
+    exit_code: Option<KeyEvent>,
 ) {
     let rt = match tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -359,71 +382,30 @@ fn event_thread(
 
     rt.block_on(async move {
         let mut reader = EventStream::new();
-        let mut events = Vec::new();
-
-        // Send initial empty event list
-        if event_tx.send(Vec::new()).await.is_err() {
-            warn!("Failed to send initial events, render thread may have stopped");
-            return;
-        }
-
-        // Create a timer for continuous rendering (60 FPS = ~16.67ms per frame)
-        let mut interval = tokio::time::interval(Duration::from_millis(16));
-        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
         loop {
-            let event = reader.next().fuse();
-            select! {
-                _ = interval.tick() => {
-                    // Timer tick - wait for render thread to be ready, then send events
-                    if render_rx.recv().await.is_none() {
+            match reader.next().await {
+                Some(Ok(event)) => {
+                    if let Some(exit_key) = exit_code {
+                        if let Event::Key(key_event) = event {
+                            if key_event == exit_key {
+                                let _ = stop_tx.send(());
+                                break;
+                            }
+                        }
+                    }
+
+                    if event_tx.send(event).is_err() {
                         break;
                     }
-                    if event_tx.send(events.clone()).await.is_err() {
-                        break;
-                    }
-                    events.clear();
                 }
-                maybe_event = event => {
-                    match maybe_event {
-                        Some(Ok(event)) => {
-                            // Only check exit code if it's enabled
-                            if let Some(exit_key) = exit_code {
-                                if let Event::Key(key_event) = event {
-                                    if key_event == exit_key {
-                                        // User requested exit
-                                        let _ = stop_tx.send(());
-                                        break;
-                                    }
-                                }
-                            }
-                            if events.len() < max_event_per_frame {
-                                events.push(event);
-                            }
-                            // Send immediately when we have events - don't wait for timer.
-                            // This reduces input latency (especially for key repeat) from
-                            // up to 16ms to near-zero.
-                            if !events.is_empty() {
-                                if render_rx.recv().await.is_none() {
-                                    break;
-                                }
-                                if event_tx.send(events.clone()).await.is_err() {
-                                    break;
-                                }
-                                events.clear();
-                            }
-                        }
-                        Some(Err(e)) => {
-                            error!("Error reading event: {}", e);
-                            // Continue processing despite errors
-                        }
-                        None => {
-                            // Event stream ended
-                            warn!("Event stream ended");
-                            let _ = stop_tx.send(());
-                            break;
-                        }
-                    }
+                Some(Err(e)) => {
+                    error!("Error reading event: {}", e);
+                }
+                None => {
+                    warn!("Event stream ended");
+                    let _ = stop_tx.send(());
+                    break;
                 }
             }
         }
