@@ -13,3 +13,63 @@ syntect = { workspace = true }
 once_cell = { workspace = true }
 rustc-hash = "2.0"
 smallvec = "1.13"
+
+[[example]]
+name = "hello"
+path = "examples/basics/hello.rs"
+
+[[example]]
+name = "grid"
+path = "examples/layout/grid.rs"
+
+[[example]]
+name = "layout"
+path = "examples/layout/layout.rs"
+
+[[example]]
+name = "button"
+path = "examples/widgets/button.rs"
+
+[[example]]
+name = "calendar"
+path = "examples/widgets/calendar.rs"
+
+[[example]]
+name = "data_table"
+path = "examples/widgets/data_table.rs"
+
+[[example]]
+name = "list"
+path = "examples/widgets/list.rs"
+
+[[example]]
+name = "select"
+path = "examples/widgets/select.rs"
+
+[[example]]
+name = "text_input"
+path = "examples/widgets/text_input.rs"
+
+[[example]]
+name = "tree"
+path = "examples/widgets/tree.rs"
+
+[[example]]
+name = "equalizer"
+path = "examples/scenes/equalizer.rs"
+
+[[example]]
+name = "flame"
+path = "examples/scenes/flame.rs"
+
+[[example]]
+name = "hanoi"
+path = "examples/scenes/hanoi.rs"
+
+[[example]]
+name = "starfield"
+path = "examples/scenes/starfield.rs"
+
+[[example]]
+name = "wave"
+path = "examples/scenes/wave.rs"
