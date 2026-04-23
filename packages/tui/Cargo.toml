@@ -35,6 +35,10 @@ name = "theme"
 path = "examples/themes/theme.rs"
 
 [[example]]
+name = "shell"
+path = "examples/apps/shell.rs"
+
+[[example]]
 name = "button"
 path = "examples/widgets/button.rs"
 

@@ -1,5 +1,7 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::sync::mpsc::{self, Receiver, Sender};
+use std::thread;
 use std::time::{Duration, Instant};
 
 use crossterm::event::Event;
@@ -7,8 +9,13 @@ use render::area::Size;
 use render::chunk::Chunk;
 use render::{Draw, DrawErr, Update};
 
+use crate::effect::{
+    run_task_attempt, sleep_with_cancellation, CancellationToken, Effect, Task, TaskEvent,
+    TaskEventSender, TaskId, TaskState, TaskStatus, UpdateCtx,
+};
 use crate::event::{KeyCode, KeyEvent, KeyModifiers};
 use crate::focus::FocusManager;
+use crate::shell::{CommandRouter, Hotkey, HotkeyRegistry};
 use crate::style::Theme;
 use crate::widget::{
     EventCtx, EventPhase, FocusRequest, RenderCtx, Widget, WidgetKey, WidgetPath, WidgetStore,
@@ -93,6 +100,30 @@ pub enum QuitBehavior {
     Disabled,
 }
 
+trait UpdateDriver<State, M> {
+    fn handle(&mut self, state: &mut State, message: M, ctx: &mut UpdateCtx<M>);
+}
+
+struct SimpleUpdate<F>(F);
+
+impl<State, M, F> UpdateDriver<State, M> for SimpleUpdate<F>
+where
+    F: Fn(&mut State, M),
+{
+    fn handle(&mut self, state: &mut State, message: M, _ctx: &mut UpdateCtx<M>) {
+        (self.0)(state, message);
+    }
+}
+
+impl<State, M, F> UpdateDriver<State, M> for F
+where
+    F: Fn(&mut State, M, &mut UpdateCtx<M>),
+{
+    fn handle(&mut self, state: &mut State, message: M, ctx: &mut UpdateCtx<M>) {
+        (self)(state, message, ctx);
+    }
+}
+
 // ---------------------------------------------------------------------------
 // App – public builder API
 // ---------------------------------------------------------------------------
@@ -103,6 +134,8 @@ pub struct App<State, M = ()> {
     theme: Theme,
     theme_resolver: Option<ThemeResolver<State>>,
     global_key_handlers: HashMap<KeyCode, EventHandler<M>>,
+    hotkeys: HotkeyRegistry<M>,
+    command_router: Option<CommandRouter<M>>,
     tick_handlers: Vec<TickConfig<M>>,
     frame_handlers: Vec<FrameConfig<M>>,
     quit_behavior: QuitBehavior,
@@ -118,13 +151,15 @@ impl<State: std::fmt::Debug, M> std::fmt::Debug for App<State, M> {
     }
 }
 
-impl<State, M: Clone + std::fmt::Debug + 'static> App<State, M> {
+impl<State, M: Clone + std::fmt::Debug + Send + 'static> App<State, M> {
     pub fn new(state: State) -> Self {
         Self {
             state,
             theme: Theme::dark(),
             theme_resolver: None,
             global_key_handlers: HashMap::new(),
+            hotkeys: HotkeyRegistry::new(),
+            command_router: None,
             tick_handlers: Vec::new(),
             frame_handlers: Vec::new(),
             quit_behavior: QuitBehavior::default(),
@@ -154,6 +189,27 @@ impl<State, M: Clone + std::fmt::Debug + 'static> App<State, M> {
         F: Fn() -> M + 'static,
     {
         self.global_key_handlers.insert(key, Box::new(handler));
+        self
+    }
+
+    /// Register a richer hotkey with metadata and modifier support.
+    pub fn on_hotkey<F>(mut self, hotkey: Hotkey, handler: F) -> Self
+    where
+        F: Fn() -> M + 'static,
+    {
+        self.hotkeys.bind(hotkey, handler);
+        self
+    }
+
+    /// Install a reusable hotkey registry.
+    pub fn with_hotkeys(mut self, hotkeys: HotkeyRegistry<M>) -> Self {
+        self.hotkeys = hotkeys;
+        self
+    }
+
+    /// Install a command router that can dispatch commands from hotkeys.
+    pub fn with_command_router(mut self, command_router: CommandRouter<M>) -> Self {
+        self.command_router = Some(command_router);
         self
     }
 
@@ -223,7 +279,7 @@ impl<State, M: Clone + std::fmt::Debug + 'static> App<State, M> {
         W: Widget<M> + 'static,
     {
         let view_fn = move |state: &State| -> Box<dyn Widget<M>> { Box::new(view(state)) };
-        self.run_with_options(update, view_fn, false)
+        self.run_with_options(SimpleUpdate(update), view_fn, false)
     }
 
     /// Run the application in inline (non-fullscreen) mode.
@@ -234,12 +290,34 @@ impl<State, M: Clone + std::fmt::Debug + 'static> App<State, M> {
         W: Widget<M> + 'static,
     {
         let view_fn = move |state: &State| -> Box<dyn Widget<M>> { Box::new(view(state)) };
+        self.run_with_options(SimpleUpdate(update), view_fn, true)
+    }
+
+    /// Run the application with an update context that can schedule effects.
+    pub fn run_with_effects<F, V, W>(self, update: F, view: V) -> WidgetResult<()>
+    where
+        F: Fn(&mut State, M, &mut UpdateCtx<M>),
+        V: Fn(&State) -> W,
+        W: Widget<M> + 'static,
+    {
+        let view_fn = move |state: &State| -> Box<dyn Widget<M>> { Box::new(view(state)) };
+        self.run_with_options(update, view_fn, false)
+    }
+
+    /// Run the application inline with an update context that can schedule effects.
+    pub fn run_inline_with_effects<F, V, W>(self, update: F, view: V) -> WidgetResult<()>
+    where
+        F: Fn(&mut State, M, &mut UpdateCtx<M>),
+        V: Fn(&State) -> W,
+        W: Widget<M> + 'static,
+    {
+        let view_fn = move |state: &State| -> Box<dyn Widget<M>> { Box::new(view(state)) };
         self.run_with_options(update, view_fn, true)
     }
 
-    fn run_with_options<F, V>(self, update: F, view: V, inline_mode: bool) -> WidgetResult<()>
+    fn run_with_options<U, V>(self, update: U, view: V, inline_mode: bool) -> WidgetResult<()>
     where
-        F: Fn(&mut State, M),
+        U: UpdateDriver<State, M>,
         V: Fn(&State) -> Box<dyn Widget<M>>,
     {
         let (width, height) = crossterm::terminal::size()?;
@@ -258,11 +336,15 @@ impl<State, M: Clone + std::fmt::Debug + 'static> App<State, M> {
             theme,
             theme_resolver,
             global_key_handlers,
+            hotkeys,
+            command_router,
             tick_handlers,
             frame_handlers,
             quit_behavior,
             mouse_capture,
         } = self;
+
+        let (task_sender, task_receiver) = mpsc::channel();
 
         let runtime = AppRuntime {
             state,
@@ -278,6 +360,8 @@ impl<State, M: Clone + std::fmt::Debug + 'static> App<State, M> {
             should_quit: false,
             quit_behavior,
             global_key_handlers,
+            hotkeys,
+            command_router,
             tick_handlers: tick_handlers
                 .into_iter()
                 .map(|tick| TickRuntime {
@@ -293,6 +377,12 @@ impl<State, M: Clone + std::fmt::Debug + 'static> App<State, M> {
             frame_runtime: FrameRuntime::new(),
             inline_mode,
             inline_max_height,
+            task_sender,
+            task_receiver,
+            next_task_id: 0,
+            tasks: HashMap::new(),
+            task_keys: HashMap::new(),
+            task_order: Vec::new(),
         };
 
         let mut builder = render::Builder::new();
@@ -334,11 +424,17 @@ impl<State, M: Clone + std::fmt::Debug + 'static> App<State, M> {
 // AppRuntime – implements Draw + Update for the render event loop
 // ---------------------------------------------------------------------------
 
-struct AppRuntime<State, F, V, M> {
+struct TaskRecord<M> {
+    status: TaskStatus,
+    cancellation: CancellationToken,
+    status_handler: Option<crate::effect::StatusHandler<M>>,
+}
+
+struct AppRuntime<State, U, V, M> {
     state: State,
     theme: Theme,
     theme_resolver: Option<ThemeResolver<State>>,
-    update_fn: F,
+    update_fn: U,
     view_fn: V,
     store: WidgetStore,
     geometry: RefCell<HashMap<WidgetPath, render::area::Area>>,
@@ -348,14 +444,24 @@ struct AppRuntime<State, F, V, M> {
     should_quit: bool,
     quit_behavior: QuitBehavior,
     global_key_handlers: HashMap<KeyCode, Box<dyn Fn() -> M>>,
+    hotkeys: HotkeyRegistry<M>,
+    command_router: Option<CommandRouter<M>>,
     tick_handlers: Vec<TickRuntime<M>>,
     frame_handlers: Vec<FrameHandler<M>>,
     frame_runtime: FrameRuntime,
     inline_mode: bool,
     inline_max_height: u16,
+    task_sender: Sender<TaskEvent<M>>,
+    task_receiver: Receiver<TaskEvent<M>>,
+    next_task_id: u64,
+    tasks: HashMap<TaskId, TaskRecord<M>>,
+    task_keys: HashMap<String, TaskId>,
+    task_order: Vec<TaskId>,
 }
 
-impl<State, F, V, M> AppRuntime<State, F, V, M> {
+impl<State, U, V, M: Send + 'static> AppRuntime<State, U, V, M> {
+    const MAX_TRACKED_TASKS: usize = 256;
+
     fn ensure_tree(&mut self)
     where
         V: Fn(&State) -> Box<dyn Widget<M>>,
@@ -530,13 +636,12 @@ impl<State, F, V, M> AppRuntime<State, F, V, M> {
         handled
     }
 
-    fn queue_tick_messages(&mut self) -> bool {
+    fn queue_tick_messages(&mut self) {
         if self.tick_handlers.is_empty() {
-            return false;
+            return;
         }
 
         let now = Instant::now();
-        let mut fired = false;
 
         for tick in &mut self.tick_handlers {
             if now < tick.next_fire_at {
@@ -544,35 +649,232 @@ impl<State, F, V, M> AppRuntime<State, F, V, M> {
             }
 
             self.messages.push((tick.handler)());
-            fired = true;
 
             while tick.next_fire_at <= now {
                 tick.next_fire_at += tick.interval;
             }
         }
-
-        fired
     }
 
-    fn queue_frame_messages(&mut self) -> bool {
+    fn queue_frame_messages(&mut self) {
         if self.frame_handlers.is_empty() {
-            return false;
+            return;
         }
 
         let info = self.frame_runtime.next(Instant::now());
         for handler in &self.frame_handlers {
             self.messages.push(handler(info));
         }
+    }
 
-        true
+    fn task_statuses(&self) -> Vec<TaskStatus> {
+        self.task_order
+            .iter()
+            .filter_map(|task_id| self.tasks.get(task_id).map(|record| record.status.clone()))
+            .collect()
+    }
+
+    fn record_task_status(&mut self, status: TaskStatus) {
+        let Some(record) = self.tasks.get_mut(&status.id) else {
+            return;
+        };
+
+        record.status = status.clone();
+
+        if let Some(handler) = record.status_handler.as_ref() {
+            self.messages.push(handler(status));
+        }
+    }
+
+    fn drain_task_events(&mut self) {
+        while let Ok(event) = self.task_receiver.try_recv() {
+            match event {
+                TaskEvent::Message(message) => self.messages.push(message),
+                TaskEvent::Status(status) => self.record_task_status(status),
+            }
+        }
+    }
+
+    fn cancel_task(&mut self, task_id: TaskId) {
+        let mut status = None;
+
+        if let Some(record) = self.tasks.get_mut(&task_id) {
+            if record.status.state.is_terminal() || record.status.state == TaskState::Cancelling {
+                return;
+            }
+
+            record.cancellation.cancel();
+            let mut next = record.status.clone();
+            next.state = TaskState::Cancelling;
+            next.updated_at = Instant::now();
+            status = Some(next);
+        }
+
+        if let Some(status) = status {
+            self.record_task_status(status);
+        }
+    }
+
+    fn cancel_task_key(&mut self, key: &str) {
+        if let Some(task_id) = self.task_keys.get(key).copied() {
+            self.cancel_task(task_id);
+        }
+    }
+
+    fn prune_finished_tasks(&mut self) {
+        while self.tasks.len() > Self::MAX_TRACKED_TASKS {
+            let Some(index) = self.task_order.iter().position(|task_id| {
+                self.tasks
+                    .get(task_id)
+                    .map(|record| record.status.state.is_terminal())
+                    .unwrap_or(false)
+            }) else {
+                break;
+            };
+
+            let task_id = self.task_order.remove(index);
+            if let Some(record) = self.tasks.remove(&task_id) {
+                if let Some(key) = record.status.key {
+                    if self.task_keys.get(&key) == Some(&task_id) {
+                        self.task_keys.remove(&key);
+                    }
+                }
+            }
+        }
+    }
+
+    fn spawn_task(&mut self, task: Task<M>) {
+        if let Some(key) = task.key.as_deref() {
+            if let Some(existing) = self.task_keys.get(key).copied() {
+                self.cancel_task(existing);
+            }
+        }
+
+        let task_id = TaskId(self.next_task_id);
+        self.next_task_id = self.next_task_id.wrapping_add(1);
+
+        let created_at = Instant::now();
+        let status = TaskStatus::new(
+            task_id,
+            task.key.clone(),
+            task.label.clone(),
+            TaskState::Queued,
+            1,
+            task.retry.max_attempts(),
+            created_at,
+        );
+        let cancellation = CancellationToken::new();
+
+        if let Some(key) = task.key.as_ref() {
+            self.task_keys.insert(key.clone(), task_id);
+        }
+        self.task_order.push(task_id);
+        self.tasks.insert(
+            task_id,
+            TaskRecord {
+                status: status.clone(),
+                cancellation: cancellation.clone(),
+                status_handler: task.status_handler.clone(),
+            },
+        );
+        self.record_task_status(status);
+        self.prune_finished_tasks();
+
+        let sender = TaskEventSender::new(self.task_sender.clone());
+        let key = task.key.clone();
+        let label = task.label.clone();
+        let retry = task.retry;
+        let timeout = task.timeout;
+        let runner = task.runner.clone();
+
+        thread::spawn(move || {
+            let mut attempt = 1;
+
+            loop {
+                let state = run_task_attempt(
+                    task_id,
+                    key.clone(),
+                    label.clone(),
+                    created_at,
+                    attempt,
+                    retry,
+                    timeout,
+                    cancellation.clone(),
+                    sender.clone(),
+                    runner.clone(),
+                );
+
+                if state == TaskState::RetryScheduled {
+                    sender.send(TaskEvent::Status(TaskStatus::new(
+                        task_id,
+                        key.clone(),
+                        label.clone(),
+                        TaskState::RetryScheduled,
+                        attempt,
+                        retry.max_attempts(),
+                        created_at,
+                    )));
+
+                    if !sleep_with_cancellation(&cancellation, retry.delay()) {
+                        let cancelled_state = TaskState::Cancelled;
+                        sender.send(TaskEvent::Status(TaskStatus::new(
+                            task_id,
+                            key.clone(),
+                            label.clone(),
+                            cancelled_state,
+                            attempt,
+                            retry.max_attempts(),
+                            created_at,
+                        )));
+                        break;
+                    }
+
+                    attempt += 1;
+                    continue;
+                }
+
+                sender.send(TaskEvent::Status(TaskStatus::new(
+                    task_id,
+                    key.clone(),
+                    label.clone(),
+                    state,
+                    attempt,
+                    retry.max_attempts(),
+                    created_at,
+                )));
+                break;
+            }
+        });
+    }
+
+    fn apply_effect(&mut self, effect: Effect<M>) {
+        match effect {
+            Effect::None => {}
+            Effect::Message(message) => self.messages.push(message),
+            Effect::Batch(effects) => {
+                for effect in effects {
+                    self.apply_effect(effect);
+                }
+            }
+            Effect::Spawn(task) => self.spawn_task(task),
+            Effect::CancelTask(task_id) => self.cancel_task(task_id),
+            Effect::CancelTaskKey(key) => self.cancel_task_key(&key),
+            Effect::After(duration, message) => {
+                let sender = self.task_sender.clone();
+                thread::spawn(move || {
+                    thread::sleep(duration);
+                    let _ = sender.send(TaskEvent::Message(message));
+                });
+            }
+        }
     }
 }
 
-impl<State, F, V, M> Draw for AppRuntime<State, F, V, M>
+impl<State, U, V, M> Draw for AppRuntime<State, U, V, M>
 where
-    F: Fn(&mut State, M),
+    U: UpdateDriver<State, M>,
     V: Fn(&State) -> Box<dyn Widget<M>>,
-    M: Clone + std::fmt::Debug,
+    M: Clone + std::fmt::Debug + Send + 'static,
 {
     fn draw(&mut self, mut chunk: Chunk) -> Result<Size, DrawErr> {
         let size = chunk.area().size();
@@ -600,11 +902,11 @@ where
     }
 }
 
-impl<State, F, V, M> Update for AppRuntime<State, F, V, M>
+impl<State, U, V, M> Update for AppRuntime<State, U, V, M>
 where
-    F: Fn(&mut State, M),
+    U: UpdateDriver<State, M>,
     V: Fn(&State) -> Box<dyn Widget<M>>,
-    M: Clone + std::fmt::Debug,
+    M: Clone + std::fmt::Debug + Send + 'static,
 {
     fn on_events(&mut self, events: &[Event]) -> Result<(), DrawErr> {
         // Reset TextInputState.modified_this_batch so we sync from parent when value differs
@@ -670,7 +972,21 @@ where
                 return Ok(());
             }
 
-            // 3. Global key handlers
+            // 3. Command router
+            if let Some(router) = self.command_router.as_ref() {
+                if let Some(message) = router.dispatch_hotkey(key_event) {
+                    self.messages.push(message);
+                    continue;
+                }
+            }
+
+            // 4. Rich hotkey registry
+            if let Some(message) = self.hotkeys.resolve(key_event) {
+                self.messages.push(message);
+                continue;
+            }
+
+            // 5. Legacy global key handlers
             if let Some(handler) = self.global_key_handlers.get(&key_event.code) {
                 self.messages.push(handler());
             }
@@ -680,20 +996,42 @@ where
     }
 
     fn update(&mut self) -> Result<bool, DrawErr> {
+        self.drain_task_events();
         self.queue_tick_messages();
         self.queue_frame_messages();
 
-        let had_messages = !self.messages.is_empty();
-        for msg in self.messages.drain(..) {
-            (self.update_fn)(&mut self.state, msg);
+        let mut processed_messages = false;
+
+        while !self.messages.is_empty() {
+            let batch = std::mem::take(&mut self.messages);
+            processed_messages = true;
+
+            for message in batch {
+                let mut effects = Vec::new();
+                let statuses = self.task_statuses();
+                let task_keys = self.task_keys.clone();
+                let now = Instant::now();
+
+                {
+                    let mut ctx = UpdateCtx::new(&mut effects, statuses, task_keys, now);
+                    self.update_fn.handle(&mut self.state, message, &mut ctx);
+                }
+
+                for effect in effects {
+                    self.apply_effect(effect);
+                }
+            }
+
+            self.drain_task_events();
+            self.prune_finished_tasks();
         }
 
-        if had_messages {
+        if processed_messages {
             // Invalidate cached tree so draw() rebuilds it
             self.cached_tree = None;
         }
 
-        Ok(had_messages)
+        Ok(processed_messages)
     }
 
     fn should_quit(&self) -> bool {
