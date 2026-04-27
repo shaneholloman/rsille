@@ -18,6 +18,7 @@ Example commands stay flat even though files are grouped in subdirectories:
 cargo run -p tui --example hello
 cargo run -p tui --example primitives
 cargo run -p tui --example theme
+cargo run -p tui --example controls
 cargo run -p tui --example tree
 cargo run -p tui --example flame
 ```

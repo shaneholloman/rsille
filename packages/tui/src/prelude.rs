@@ -20,16 +20,20 @@ pub use crate::shell::{
     CommandDescriptor, CommandRouter, Hotkey, HotkeyRegistry, ModalManager, Navigator,
     Notification, NotificationCenter, NotificationId, NotificationLevel,
 };
-pub use crate::style::{BorderStyle, Color, Padding, Style, Theme};
 pub use crate::state::{Derived, FormState, Store, StoreKey};
+pub use crate::style::{BorderStyle, Color, Padding, Style, Theme};
 pub use crate::widget::{
     EventCtx, EventPhase, FocusRequest, IntoWidget, RenderCtx, Widget, WidgetKey, WidgetPath,
     WidgetStore,
 };
 pub use crate::widgets::{
-    button, calendar, data_table, divider, label, list, select, spacer, text_input, tree, Button,
-    ButtonVariant, Calendar, CalendarDate, CalendarState, DataTable, DataTableColumn, DataTableRow,
-    DataTableState, Divider, DividerDirection, DividerTextPosition, DividerVariant, Label, List,
-    ListItem, ListState, Select, SelectOption, SelectState, Spacer, TableAlign, TextInput,
+    button, calendar, checkbox, collapsible, data_table, dialog, divider, label, list,
+    loading_indicator, menu, panel, progress_bar, radio_group, select, spacer, switch, tabs,
+    text_input, textarea, toggle, tree, Button, ButtonVariant, Calendar, CalendarDate,
+    CalendarState, Checkbox, Collapsible, DataTable, DataTableColumn, DataTableRow, DataTableState,
+    Dialog, Divider, DividerDirection, DividerTextPosition, DividerVariant, Label, List, ListItem,
+    ListState, LoadingIndicator, Menu, MenuItem, MenuState, Panel, ProgressBar, RadioGroup,
+    RadioGroupState, RadioOption, Select, SelectOption, SelectState, Spacer, Switch, TabItem,
+    TableAlign, Tabs, TabsState, TextArea, TextAreaState, TextAreaVariant, TextInput,
     TextInputVariant, Tree, TreeItem, TreeState,
 };

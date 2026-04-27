@@ -21,6 +21,7 @@ use crate::widget::{
     EventCtx, EventPhase, FocusRequest, RenderCtx, Widget, WidgetKey, WidgetPath, WidgetStore,
 };
 use crate::widgets::text_input::TextInputState;
+use crate::widgets::textarea::TextAreaState;
 use crate::WidgetResult;
 
 pub type EventHandler<M> = Box<dyn Fn() -> M>;
@@ -912,6 +913,8 @@ where
         // Reset TextInputState.modified_this_batch so we sync from parent when value differs
         self.store
             .for_each_state_mut::<TextInputState, _>(|_, s| s.modified_this_batch = false);
+        self.store
+            .for_each_state_mut::<TextAreaState, _>(|_, s| s.modified_this_batch = false);
 
         // Ensure we have a tree (may be missing on first frame before draw)
         self.ensure_tree();

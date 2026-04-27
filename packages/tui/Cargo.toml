@@ -47,6 +47,10 @@ name = "calendar"
 path = "examples/widgets/calendar.rs"
 
 [[example]]
+name = "controls"
+path = "examples/widgets/controls.rs"
+
+[[example]]
 name = "data_table"
 path = "examples/widgets/data_table.rs"
 
