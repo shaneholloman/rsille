@@ -8,6 +8,7 @@ Examples are grouped by intent so the directory stays navigable as the set grows
 - `themes/`: theme and styling system demos
 - `layout/`: composition and layout primitives
 - `widgets/`: focused widget behavior demos
+- `apps/`: end-to-end application patterns and state orchestration
 - `scenes/`: richer animated or visual showcase examples
 
 ## Running Examples
@@ -18,6 +19,7 @@ Example commands stay flat even though files are grouped in subdirectories:
 cargo run -p tui --example hello
 cargo run -p tui --example primitives
 cargo run -p tui --example theme
+cargo run -p tui --example async
 cargo run -p tui --example controls
 cargo run -p tui --example tree
 cargo run -p tui --example flame

@@ -90,10 +90,7 @@ fn main() -> WidgetResult<()> {
             || Msg::OpenHelp,
         )
         .on_tick(Duration::from_millis(250), || Msg::CleanupNotifications)
-        .with_quit_key_event(KeyEvent::new(
-            KeyCode::Char('c'),
-            KeyModifiers::CONTROL,
-        ))
+        .with_quit_key_event(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL))
         .run_inline_with_effects(update, view)
 }
 
@@ -147,8 +144,10 @@ fn update(state: &mut State, msg: Msg, ctx: &mut UpdateCtx<Msg>) {
             );
         }
         Msg::TaskStatus(status) => {
-            if matches!(status.state, TaskState::TimedOut | TaskState::Failed | TaskState::Panicked)
-            {
+            if matches!(
+                status.state,
+                TaskState::TimedOut | TaskState::Failed | TaskState::Panicked
+            ) {
                 state.notifications.push_timed(
                     NotificationLevel::Error,
                     format!("Task {:?} ended as {:?}", status.key, status.state),
@@ -205,7 +204,9 @@ fn header(state: &State) -> impl Widget<Msg> {
         .gap(2)
         .child(label("Shell Helpers").bold())
         .child(label(format!("Route: {route}")).fg(Color::Rgb(166, 178, 189)))
-        .child(label("j jobs | b back | d dashboard | g task | n notice | h help"))
+        .child(label(
+            "j jobs | b back | d dashboard | g task | n notice | h help",
+        ))
 }
 
 fn screen_panel(state: &State) -> impl Widget<Msg> {
@@ -281,7 +282,13 @@ fn help_modal() -> impl Widget<Msg> {
         .style(Style::default().bg(Color::Rgb(25, 29, 36)))
         .child(label("Help Modal").bold())
         .child(divider())
-        .child(label("This modal is owned by ModalManager and rendered through overlay()."))
-        .child(label("Esc closes the modal, while Ctrl+C quits the whole app."))
-        .child(label("The command router handles route and task shortcuts; notifications are app-scoped."))
+        .child(label(
+            "This modal is owned by ModalManager and rendered through overlay().",
+        ))
+        .child(label(
+            "Esc closes the modal, while Ctrl+C quits the whole app.",
+        ))
+        .child(label(
+            "The command router handles route and task shortcuts; notifications are app-scoped.",
+        ))
 }

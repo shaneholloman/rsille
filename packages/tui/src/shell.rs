@@ -12,11 +12,7 @@ pub struct Hotkey {
 }
 
 impl Hotkey {
-    pub fn new(
-        id: impl Into<String>,
-        key_event: KeyEvent,
-        label: impl Into<String>,
-    ) -> Self {
+    pub fn new(id: impl Into<String>, key_event: KeyEvent, label: impl Into<String>) -> Self {
         Self {
             id: id.into(),
             key_event,
@@ -25,11 +21,7 @@ impl Hotkey {
         }
     }
 
-    pub fn simple(
-        id: impl Into<String>,
-        key_code: KeyCode,
-        label: impl Into<String>,
-    ) -> Self {
+    pub fn simple(id: impl Into<String>, key_code: KeyCode, label: impl Into<String>) -> Self {
         Self::new(id, KeyEvent::new(key_code, KeyModifiers::empty()), label)
     }
 
@@ -91,7 +83,10 @@ impl<M> HotkeyRegistry<M> {
     }
 
     pub fn bindings(&self) -> Vec<Hotkey> {
-        self.bindings.iter().map(|binding| binding.hotkey.clone()).collect()
+        self.bindings
+            .iter()
+            .map(|binding| binding.hotkey.clone())
+            .collect()
     }
 }
 
@@ -353,8 +348,11 @@ impl<T> NotificationCenter<T> {
     }
 
     pub fn prune_expired(&mut self, now: Instant) {
-        self.items
-            .retain(|item| item.expires_at.map(|deadline| deadline > now).unwrap_or(true));
+        self.items.retain(|item| {
+            item.expires_at
+                .map(|deadline| deadline > now)
+                .unwrap_or(true)
+        });
     }
 
     pub fn items(&self) -> &[Notification<T>] {

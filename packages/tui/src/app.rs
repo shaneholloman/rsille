@@ -380,6 +380,8 @@ impl<State, M: Clone + std::fmt::Debug + Send + 'static> App<State, M> {
             inline_max_height,
             task_sender,
             task_receiver,
+            debounces: HashMap::new(),
+            next_debounce_nonce: 0,
             next_task_id: 0,
             tasks: HashMap::new(),
             task_keys: HashMap::new(),
@@ -454,6 +456,8 @@ struct AppRuntime<State, U, V, M> {
     inline_max_height: u16,
     task_sender: Sender<TaskEvent<M>>,
     task_receiver: Receiver<TaskEvent<M>>,
+    debounces: HashMap<String, u64>,
+    next_debounce_nonce: u64,
     next_task_id: u64,
     tasks: HashMap<TaskId, TaskRecord<M>>,
     task_keys: HashMap<String, TaskId>,
@@ -683,7 +687,9 @@ impl<State, U, V, M: Send + 'static> AppRuntime<State, U, V, M> {
         record.status = status.clone();
 
         if let Some(handler) = record.status_handler.as_ref() {
-            self.messages.push(handler(status));
+            if let Some(message) = handler(status) {
+                self.messages.push(message);
+            }
         }
     }
 
@@ -692,6 +698,16 @@ impl<State, U, V, M: Send + 'static> AppRuntime<State, U, V, M> {
             match event {
                 TaskEvent::Message(message) => self.messages.push(message),
                 TaskEvent::Status(status) => self.record_task_status(status),
+                TaskEvent::Debounced {
+                    key,
+                    nonce,
+                    message,
+                } => {
+                    if self.debounces.get(&key) == Some(&nonce) {
+                        self.debounces.remove(&key);
+                        self.messages.push(message);
+                    }
+                }
             }
         }
     }
@@ -866,6 +882,28 @@ impl<State, U, V, M: Send + 'static> AppRuntime<State, U, V, M> {
                     thread::sleep(duration);
                     let _ = sender.send(TaskEvent::Message(message));
                 });
+            }
+            Effect::Debounce {
+                key,
+                duration,
+                message,
+            } => {
+                let nonce = self.next_debounce_nonce;
+                self.next_debounce_nonce = self.next_debounce_nonce.wrapping_add(1);
+                self.debounces.insert(key.clone(), nonce);
+
+                let sender = self.task_sender.clone();
+                thread::spawn(move || {
+                    thread::sleep(duration);
+                    let _ = sender.send(TaskEvent::Debounced {
+                        key,
+                        nonce,
+                        message,
+                    });
+                });
+            }
+            Effect::CancelDebounce(key) => {
+                self.debounces.remove(&key);
             }
         }
     }

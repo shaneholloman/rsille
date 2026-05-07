@@ -136,7 +136,9 @@ fn settings_panel(state: &State) -> impl Widget<Msg> {
                 .padding(Padding::new(1, 0, 0, 2))
                 .gap(1)
                 .on_toggle(Msg::ToggleAdvanced)
-                .child(label("Nested content stays out of focus order while collapsed."))
+                .child(label(
+                    "Nested content stays out of focus order while collapsed.",
+                ))
                 .child(button("Open dialog").on_click(|| Msg::OpenDialog)),
         )
 }

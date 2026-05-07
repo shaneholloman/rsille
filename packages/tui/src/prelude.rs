@@ -2,7 +2,8 @@
 
 pub use crate::app::{App, FrameInfo, QuitBehavior};
 pub use crate::effect::{
-    CancellationToken, Effect, RetryPolicy, Task, TaskId, TaskOutcome, TaskState, TaskStatus,
+    CancellationToken, Effect, Request, RequestContext, RequestEvent, RequestId, RequestOutcome,
+    RequestPhase, RequestState, RetryPolicy, Task, TaskId, TaskOutcome, TaskState, TaskStatus,
     UpdateCtx,
 };
 pub use crate::error::{WidgetError, WidgetResult};

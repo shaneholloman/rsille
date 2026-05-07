@@ -5,6 +5,8 @@ use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::marker::PhantomData;
 
+use crate::effect::{RequestState, TaskStatus};
+
 /// Typed key for values stored in [`Store`].
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct StoreKey<T> {
@@ -239,6 +241,18 @@ impl<T: Clone, E> FormState<T, E> {
 
     pub fn set_submitting(&mut self, submitting: bool) {
         self.submitting = submitting;
+    }
+
+    pub fn sync_submitting_with_task(&mut self, status: Option<&TaskStatus>) -> bool {
+        let submitting = status.is_some_and(TaskStatus::is_active);
+        self.submitting = submitting;
+        submitting
+    }
+
+    pub fn sync_submitting_with_request<V, Err>(&mut self, request: &RequestState<V, Err>) -> bool {
+        let submitting = request.is_loading();
+        self.submitting = submitting;
+        submitting
     }
 
     pub fn set_error(&mut self, field: impl Into<String>, error: E) {
