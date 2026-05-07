@@ -253,11 +253,11 @@ impl<M> Widget<M> for Scrollbar {
 
         let track_style = self
             .track_style
-            .unwrap_or(ctx.theme().styles.border.merge(ctx.theme().styles.surface))
+            .unwrap_or(ctx.theme().styles.scrollbar_track)
             .to_render_style();
         let thumb_style = self
             .thumb_style
-            .unwrap_or(ctx.theme().styles.selected_focused)
+            .unwrap_or(ctx.theme().styles.scrollbar_thumb)
             .to_render_style();
 
         let track_len = match self.orientation {

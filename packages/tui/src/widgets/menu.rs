@@ -216,24 +216,31 @@ impl<M: 'static> Widget<M> for Menu<M> {
         let theme = ctx.theme();
         let row_style = self
             .custom_style
-            .map(|style| style.merge(theme.styles.surface_elevated))
-            .unwrap_or(theme.styles.surface_elevated)
-            .to_render_style();
+            .map(|style| style.merge(theme.styles.surface_popup))
+            .unwrap_or(theme.styles.surface_popup);
         let active_style = if ctx.is_focused() {
             self.custom_focus_style
-                .unwrap_or(theme.styles.list_active_focused)
+                .map(|style| style.merge(theme.styles.menu_item_active_focused))
+                .unwrap_or(theme.styles.menu_item_active_focused)
         } else {
-            theme.styles.list_active
-        }
-        .to_render_style();
-        let disabled_style = theme.styles.interactive_disabled.to_render_style();
+            self.custom_focus_style
+                .map(|style| style.merge(theme.styles.menu_item_active))
+                .unwrap_or(theme.styles.menu_item_active)
+        };
+        let row_render_style = row_style.to_render_style();
+        let active_render_style = active_style.to_render_style();
+        let disabled_style = theme
+            .styles
+            .interactive_disabled
+            .merge(row_style)
+            .to_render_style();
         let border_style = if ctx.is_focused() {
             theme.styles.border_focused.to_render_style()
         } else {
             theme.styles.border.to_render_style()
         };
 
-        let _ = chunk.fill(0, 0, area.width(), area.height(), ' ', row_style);
+        let _ = chunk.fill(0, 0, area.width(), area.height(), ' ', row_render_style);
         let (content_x, content_y, content_width, content_height) =
             if let Some(border) = self.border {
                 if area.width() < 2 || area.height() < 2 {
@@ -264,9 +271,9 @@ impl<M: 'static> Widget<M> for Menu<M> {
             let style = if self.disabled || item.disabled {
                 disabled_style
             } else if is_active {
-                active_style
+                active_render_style
             } else {
-                row_style
+                row_render_style
             };
             let y = content_y + row as u16;
             let _ = chunk.fill(content_x, y, content_width, 1, ' ', style);

@@ -131,7 +131,7 @@ impl<M> Widget<M> for Dialog<M> {
 
         ctx.record_bounds(area);
 
-        let surface_style = self.style.merge(ctx.theme().styles.surface_elevated);
+        let surface_style = self.style.merge(ctx.theme().styles.surface_modal);
         let render_style = surface_style.to_render_style();
         let border_style = ctx
             .theme()

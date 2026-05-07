@@ -106,6 +106,24 @@ fn view(state: &State) -> impl Widget<Msg> {
                         .child(swatch(" header ", theme.styles.surface_header, card_style))
                         .child(swatch(" border ", theme.styles.border, card_style))
                         .child(swatch(" focus ring ", theme.styles.border_focused, card_style)),
+                )
+                .child(
+                    row::<Msg>()
+                        .gap(1)
+                        .child(swatch(" info ", theme.styles.status_info, card_style))
+                        .child(swatch(" success ", theme.styles.status_success, card_style))
+                        .child(swatch(" warning ", theme.styles.status_warning, card_style))
+                        .child(swatch(" error ", theme.styles.status_error, card_style))
+                        .child(swatch(" invalid ", theme.styles.validation_error, card_style)),
+                )
+                .child(
+                    row::<Msg>()
+                        .gap(1)
+                        .child(swatch(" modal ", theme.styles.surface_modal, card_style))
+                        .child(swatch(" popup ", theme.styles.surface_popup, card_style))
+                        .child(swatch(" tooltip ", theme.styles.surface_tooltip, card_style))
+                        .child(swatch(" menu active ", theme.styles.menu_item_active_focused, card_style))
+                        .child(swatch(" scrollbar ", theme.styles.scrollbar_thumb, card_style)),
                 ),
         )
         .child(
@@ -258,6 +276,17 @@ fn sunset_theme() -> Theme {
         .fg(Color::Rgb(255, 243, 230))
         .bg(Color::Rgb(59, 36, 58))
         .bold();
+    styles.surface_modal = Style::default()
+        .fg(Color::Rgb(255, 243, 230))
+        .bg(Color::Rgb(79, 45, 71));
+    styles.surface_popup = Style::default()
+        .fg(Color::Rgb(255, 243, 230))
+        .bg(Color::Rgb(70, 42, 66));
+    styles.surface_tooltip = Style::default()
+        .fg(Color::Rgb(34, 20, 35))
+        .bg(Color::Rgb(255, 214, 102))
+        .bold();
+    styles.overlay_backdrop = Style::default().bg(Color::Rgb(28, 16, 29));
     styles.selected = Style::default()
         .fg(Color::Rgb(34, 20, 35))
         .bg(Color::Rgb(255, 140, 92))
@@ -271,6 +300,22 @@ fn sunset_theme() -> Theme {
         .fg(Color::Rgb(255, 243, 230))
         .bg(Color::Rgb(59, 36, 58))
         .bold();
+    styles.status_info = Style::default()
+        .fg(Color::Rgb(34, 20, 35))
+        .bg(Color::Rgb(112, 214, 255))
+        .bold();
+    styles.status_success = Style::default()
+        .fg(Color::Rgb(34, 20, 35))
+        .bg(Color::Rgb(143, 242, 160))
+        .bold();
+    styles.status_warning = Style::default()
+        .fg(Color::Rgb(34, 20, 35))
+        .bg(Color::Rgb(255, 214, 102))
+        .bold();
+    styles.status_error = Style::default()
+        .fg(Color::Rgb(34, 20, 35))
+        .bg(Color::Rgb(255, 107, 129))
+        .bold();
     styles.hover = Style::default()
         .fg(Color::Rgb(34, 20, 35))
         .bg(Color::Rgb(255, 214, 102))
@@ -280,6 +325,26 @@ fn sunset_theme() -> Theme {
     styles.cursor = Style::default()
         .fg(Color::Rgb(34, 20, 35))
         .bg(Color::Rgb(255, 243, 230));
+    styles.selection_range = Style::default().bg(Color::Rgb(92, 53, 84));
+    styles.validation_info = Style::default().fg(Color::Rgb(112, 214, 255)).bold();
+    styles.validation_success = Style::default().fg(Color::Rgb(143, 242, 160)).bold();
+    styles.validation_warning = Style::default().fg(Color::Rgb(255, 214, 102)).bold();
+    styles.validation_error = Style::default().fg(Color::Rgb(255, 107, 129)).bold();
+    styles.menu_item_hover = Style::default()
+        .fg(Color::Rgb(255, 243, 230))
+        .bg(Color::Rgb(92, 53, 84))
+        .bold();
+    styles.menu_item_active = styles.menu_item_hover;
+    styles.menu_item_active_focused = Style::default()
+        .fg(Color::Rgb(255, 243, 230))
+        .bg(Color::Rgb(121, 66, 97))
+        .bold();
+    styles.scrollbar_track = Style::default()
+        .fg(Color::Rgb(137, 93, 123))
+        .bg(Color::Rgb(34, 20, 35));
+    styles.scrollbar_thumb = Style::default()
+        .fg(Color::Rgb(255, 214, 102))
+        .bg(Color::Rgb(59, 36, 58));
 
     Theme::builder().name("sunset").styles(styles).build()
 }
