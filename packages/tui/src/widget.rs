@@ -7,6 +7,7 @@ use render::area::Area;
 use render::chunk::Chunk;
 use smallvec::SmallVec;
 
+use crate::animation::{AnimationCtx, AnimationStore};
 use crate::event::Event;
 use crate::focus::FocusConfig;
 use crate::layout::Constraints;
@@ -171,6 +172,13 @@ pub trait Widget<M> {
     /// `ctx.emit(msg)`, and request focus changes via the focus helpers.
     fn handle_event(&self, _event: &Event, _ctx: &mut EventCtx<M>) {}
 
+    /// Advance component-level animation state for this widget.
+    ///
+    /// Return `true` when the animation changed a value or needs another frame.
+    fn animate(&self, _ctx: &mut AnimationCtx) -> bool {
+        false
+    }
+
     /// Return size constraints for layout computation.
     fn constraints(&self) -> Constraints;
 
@@ -204,6 +212,10 @@ impl<M> Widget<M> for Box<dyn Widget<M>> {
         (**self).handle_event(event, ctx)
     }
 
+    fn animate(&self, ctx: &mut AnimationCtx) -> bool {
+        (**self).animate(ctx)
+    }
+
     fn constraints(&self) -> Constraints {
         (**self).constraints()
     }
@@ -231,6 +243,7 @@ impl<M> Widget<M> for Box<dyn Widget<M>> {
 /// and the current render theme.
 pub struct RenderCtx<'a> {
     store: &'a WidgetStore,
+    animation_store: &'a AnimationStore,
     theme: &'a Theme,
     focused_path: Option<&'a WidgetPath>,
     current_path: WidgetPath,
@@ -240,12 +253,14 @@ pub struct RenderCtx<'a> {
 impl<'a> RenderCtx<'a> {
     pub fn new(
         store: &'a WidgetStore,
+        animation_store: &'a AnimationStore,
         theme: &'a Theme,
         focused_path: Option<&'a WidgetPath>,
         geometry: &'a RefCell<HashMap<WidgetPath, Area>>,
     ) -> Self {
         Self {
             store,
+            animation_store,
             theme,
             focused_path,
             current_path: WidgetPath::root(),
@@ -292,6 +307,11 @@ impl<'a> RenderCtx<'a> {
         self.store.get::<T>(&self.current_path)
     }
 
+    /// Read the current animation value for this widget and channel.
+    pub fn animation_value(&self, channel: &str) -> Option<f64> {
+        self.animation_store.value(&self.current_path, channel)
+    }
+
     /// Read persistent state, or return a default reference if absent.
     /// This is a convenience that avoids `unwrap_or` at every call-site
     /// by falling back to a leaked static default. Use sparingly.
@@ -328,6 +348,7 @@ impl<'a> RenderCtx<'a> {
     pub fn child_ctx(&self, key: impl Into<WidgetKey>) -> RenderCtx<'a> {
         RenderCtx {
             store: self.store,
+            animation_store: self.animation_store,
             theme: self.theme,
             focused_path: self.focused_path,
             current_path: self.current_path.child(key),

@@ -9,6 +9,7 @@ use render::area::Size;
 use render::chunk::Chunk;
 use render::{Draw, DrawErr, Update};
 
+use crate::animation::{AnimationCtx, AnimationStore};
 use crate::effect::{
     run_task_attempt, sleep_with_cancellation, CancellationToken, Effect, Task, TaskEvent,
     TaskEventSender, TaskId, TaskState, TaskStatus, UpdateCtx,
@@ -354,6 +355,7 @@ impl<State, M: Clone + std::fmt::Debug + Send + 'static> App<State, M> {
             update_fn: update,
             view_fn: view,
             store: WidgetStore::new(),
+            animation_store: AnimationStore::new(),
             geometry: RefCell::new(HashMap::new()),
             focus: FocusManager::new(),
             cached_tree: None,
@@ -440,6 +442,7 @@ struct AppRuntime<State, U, V, M> {
     update_fn: U,
     view_fn: V,
     store: WidgetStore,
+    animation_store: AnimationStore,
     geometry: RefCell<HashMap<WidgetPath, render::area::Area>>,
     focus: FocusManager,
     cached_tree: Option<Box<dyn Widget<M>>>,
@@ -475,6 +478,8 @@ impl<State, U, V, M: Send + 'static> AppRuntime<State, U, V, M> {
             let tree = (self.view_fn)(&self.state);
             self.focus.rebuild(tree.as_ref());
             self.store
+                .retain_active(|path| self.focus.live_paths().contains(path));
+            self.animation_store
                 .retain_active(|path| self.focus.live_paths().contains(path));
             self.cached_tree = Some(tree);
         }
@@ -639,6 +644,44 @@ impl<State, U, V, M: Send + 'static> AppRuntime<State, U, V, M> {
         }
 
         handled
+    }
+
+    fn animate_widget_tree(
+        widget: &dyn Widget<M>,
+        path: &mut WidgetPath,
+        store: &mut AnimationStore,
+        focused_path: Option<&WidgetPath>,
+        now: Instant,
+    ) -> bool {
+        let mut needs_render = {
+            let mut ctx = AnimationCtx::new(store, path.clone(), focused_path, now);
+            widget.animate(&mut ctx)
+        };
+
+        for (index, child) in widget.children().iter().enumerate() {
+            path.push(WidgetKey::for_child(index, child.as_ref()));
+            needs_render |=
+                Self::animate_widget_tree(child.as_ref(), path, store, focused_path, now);
+            path.pop();
+        }
+
+        needs_render
+    }
+
+    fn animate_widgets(&mut self) -> bool {
+        let Some(tree) = self.cached_tree.as_ref() else {
+            return false;
+        };
+
+        let focused_path = self.focus.current_path().cloned();
+        let mut path = WidgetPath::root();
+        Self::animate_widget_tree(
+            tree.as_ref(),
+            &mut path,
+            &mut self.animation_store,
+            focused_path.as_ref(),
+            Instant::now(),
+        )
     }
 
     fn queue_tick_messages(&mut self) {
@@ -927,11 +970,19 @@ where
         self.focus.rebuild(tree.as_ref());
         self.store
             .retain_active(|path| self.focus.live_paths().contains(path));
+        self.animation_store
+            .retain_active(|path| self.focus.live_paths().contains(path));
 
         // Render
         let focused_path = self.focus.current_path();
         self.geometry.borrow_mut().clear();
-        let ctx = RenderCtx::new(&self.store, &self.theme, focused_path, &self.geometry);
+        let ctx = RenderCtx::new(
+            &self.store,
+            &self.animation_store,
+            &self.theme,
+            focused_path,
+            &self.geometry,
+        );
         tree.render(&mut chunk, &ctx);
 
         // Cache tree for event handling in on_events()
@@ -1072,7 +1123,10 @@ where
             self.cached_tree = None;
         }
 
-        Ok(processed_messages)
+        self.ensure_tree();
+        let needs_animation_frame = self.animate_widgets();
+
+        Ok(processed_messages || needs_animation_frame)
     }
 
     fn should_quit(&self) -> bool {

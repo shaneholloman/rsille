@@ -59,6 +59,10 @@ name = "controls"
 path = "examples/widgets/controls.rs"
 
 [[example]]
+name = "animation"
+path = "examples/widgets/animation.rs"
+
+[[example]]
 name = "content_viewers"
 path = "examples/widgets/content_viewers.rs"
 
