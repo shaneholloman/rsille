@@ -190,10 +190,12 @@ pub(crate) fn render_children_vertical<M>(
             continue;
         }
         let child_area = Area::new((content.x(), y).into(), (content.width(), height).into());
-        if let Ok(mut child_chunk) = chunk.from_area(child_area) {
-            let child_ctx = ctx.child_ctx(WidgetKey::for_child(index, child.as_ref()));
-            child.render(&mut child_chunk, &child_ctx);
-        }
+        ctx.render_child_at(
+            chunk,
+            WidgetKey::for_child(index, child.as_ref()),
+            child.as_ref(),
+            child_area,
+        );
         y = y.saturating_add(height).saturating_add(gap);
     }
 }

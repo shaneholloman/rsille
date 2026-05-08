@@ -40,10 +40,14 @@
 - [x] 状态清理：当前 live widget tree 消失的路径会从 animation store 中清理。
 - [x] 测试覆盖：已覆盖 value retarget、delay、disabled motion、pulse 清理、layout retarget、style interpolation、timeline sequence/stagger 等核心行为。
 
+本轮继续补齐的部分：
+
+- [x] 全局 layout diff pipeline：`Widget::layout_transition` / `Widget::shared_transition` 已接入父级布局容器，Flex、Grid、Panel、Split、Stack、Overlay 会在分配子节点 area 时统一登记 target area、读取 displayed area 并按 clip policy 渲染。
+- [x] shared transition：新增 `SharedTransition`、`Animated::shared(...)`、`Animated::shared_transition(...)` 和 shared layout track，支持跨 `WidgetPath` 复用同一个 shared id 的 area 过渡。
+
 仍然预留、尚未完整运行时化的部分：
 
-- [ ] 全局 layout diff pipeline：当前 layout transition 通过 wrapper/render 阶段 target area 驱动，尚未实现文档中完整的 layout 前后 tree snapshot diff。
-- [ ] shared transition：跨 widget path 的 shared element/area transition 仍为后续扩展。
+- [ ] 更细粒度的 hit testing 策略：当前事件几何仍以 target area 为主，尚未暴露 `HitTestMode` 配置。
 
 ## 设计目标
 
@@ -349,6 +353,25 @@ pub enum ClipMode {
 }
 ```
 
+共享元素 / area 过渡：
+
+```rust
+animate(row)
+    .key("selected-row")
+    .shared("active-selection")
+    .layout(AnimationSpec::normal())
+```
+
+或者显式指定 shared transition 参数：
+
+```rust
+animate(dialog)
+    .shared_transition(
+        "active-selection",
+        LayoutTransition::size_and_position(AnimationSpec::slow()),
+    )
+```
+
 使用示例：
 
 ```rust
@@ -437,13 +460,23 @@ animate(menu)
 12. prune completed animation state
 ```
 
-当前实现只有：
+当前实现已经从早期的：
 
 ```text
 build tree -> animate widget channels -> render animated values
 ```
 
-完整系统需要在 layout 前后都有动画参与点。
+推进到 layout 容器统一参与：
+
+```text
+build tree
+-> animate widget channels
+-> parent layout computes child target area
+-> runtime records target snapshot by WidgetPath/shared id
+-> animation store returns displayed area
+-> parent renders child inside displayed/clipped area
+-> active layout tracks request next frame
+```
 
 ## Layout 动画设计
 
@@ -735,20 +768,13 @@ button("Save").animated()
 - 全局 motion policy 可以统一影响组件动画，不需要每个组件自己判断测试模式或 reduced motion。
 - theme 级动画参数可以被 `.animated()` 默认动画消费。
 
-但它还不是完整系统。
+本轮之后，主体动画系统已经具备完整 runtime 骨架。
 
-尚未实现：
+仍可继续增强：
 
-- layout area snapshot。
-- animated layout。
-- layout/render bridge 中使用 clipped child。
-- 组件级 clipping 动画，例如 collapsible height animation。
-- presence / exit retention。
+- 组件级专用 clipping 动画，例如 collapsible height animation。
 - style token transition。
-- timeline / choreography。
-- wrapper-level `animate(child)` API。
-- layout position/size track 的 runtime 更新。
-- key-based list move detection。
+- hit testing / interactivity policy 的公开配置。
 - deterministic clock 的端到端 runtime 测试。
 
 ## 分阶段实现计划
@@ -793,48 +819,48 @@ cargo check -p tui --examples
 
 ### Phase 3：Layout Snapshot 和 Animated Area
 
-状态：部分完成 API 基础，runtime pipeline 尚未接入。
+状态：已完成基础 runtime pipeline。
 
 目标：支持位置、尺寸、重排动画。
 
 内容：
 
-- [ ] layout 前后 area snapshot。
+- [x] layout 前后 area snapshot。
 - [x] `AreaF`
 - [x] `LayoutTransition`
-- [ ] position/size track。
-- [ ] render 使用 displayed area。
-- [ ] key-based list move detection。
+- [x] position/size track。
+- [x] render 使用 displayed area。
+- [x] key-based list move detection。
 
 ### Phase 4：Clipping
 
-状态：部分完成 render 基础设施，组件 / layout 集成尚未完成。
+状态：已完成基础设施和 layout 集成。
 
 目标：支持高度动画、展开/收起、dialog scale。
 
 内容：
 
 - [x] render `Chunk` clip 支持。
-- [ ] layout/render bridge 支持 clipped child。
+- [x] layout/render bridge 支持 clipped child。
 - [x] `ClipMode`
 - [ ] collapsible height animation。
 
 ### Phase 5：Presence
 
-状态：未开始。
+状态：已完成基础 runtime。
 
 目标：支持 enter/exit。
 
 内容：
 
-- mounted / entering / exiting / unmounted 状态。
-- exiting visual node retention。
-- focus 与 exiting path 协作。
-- overlay/dialog/toast/list item exit animation。
+- [x] mounted / entering / exiting / unmounted 状态。
+- [x] exiting visual node retention。
+- [x] focus 与 exiting path 协作。
+- [x] overlay/dialog/toast/list item exit animation 的基础能力。
 
 ### Phase 6：Style 和 Timeline
 
-状态：部分完成 style 插值基础，timeline 未开始。
+状态：已完成 style 插值基础和 timeline runtime。
 
 目标：支持样式过渡和复杂编排。
 
@@ -842,8 +868,8 @@ cargo check -p tui --examples
 
 - [ ] style token transition。
 - [x] color interpolation / discrete fallback。
-- [ ] sequence / parallel / stagger。
-- [ ] wrapper-level `animate(child)` API。
+- [x] sequence / parallel / stagger。
+- [x] wrapper-level `animate(child)` API。
 
 ## 测试策略
 

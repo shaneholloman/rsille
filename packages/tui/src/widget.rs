@@ -8,8 +8,8 @@ use render::chunk::Chunk;
 use smallvec::SmallVec;
 
 use crate::animation::{
-    AnimationCtx, AnimationStore, LayoutSnapshot, LayoutTransition, MotionPolicy, Presence,
-    Timeline, TimelineFrame,
+    AnimationCtx, AnimationStore, ClipMode, LayoutSnapshot, LayoutTransition, MotionPolicy,
+    Presence, SharedTransition, Timeline, TimelineFrame,
 };
 use crate::event::Event;
 use crate::focus::FocusConfig;
@@ -188,6 +188,16 @@ pub trait Widget<M> {
         None
     }
 
+    /// Layout transition declaration used by parent layout containers.
+    fn layout_transition(&self) -> Option<LayoutTransition> {
+        None
+    }
+
+    /// Shared layout transition declaration used across widget paths.
+    fn shared_transition(&self) -> Option<&SharedTransition> {
+        None
+    }
+
     /// Return size constraints for layout computation.
     fn constraints(&self) -> Constraints;
 
@@ -227,6 +237,14 @@ impl<M> Widget<M> for Box<dyn Widget<M>> {
 
     fn presence(&self) -> Option<&Presence> {
         (**self).presence()
+    }
+
+    fn layout_transition(&self) -> Option<LayoutTransition> {
+        (**self).layout_transition()
+    }
+
+    fn shared_transition(&self) -> Option<&SharedTransition> {
+        (**self).shared_transition()
     }
 
     fn constraints(&self) -> Constraints {
@@ -282,6 +300,13 @@ impl AnimationStoreView<'_> {
         }
     }
 
+    fn shared_layout_snapshot(self, id: &str) -> Option<LayoutSnapshot> {
+        match self {
+            Self::ReadOnly(store) => store.shared_layout_snapshot(id),
+            Self::Mutable(store) => store.borrow().shared_layout_snapshot(id),
+        }
+    }
+
     fn track_timeline(
         self,
         path: &WidgetPath,
@@ -312,6 +337,8 @@ pub struct RenderCtx<'a> {
     geometry: &'a RefCell<HashMap<WidgetPath, Area>>,
     now: std::time::Instant,
     motion_policy: MotionPolicy,
+    layout_target: Option<Area>,
+    layout_managed: bool,
 }
 
 impl<'a> RenderCtx<'a> {
@@ -331,6 +358,8 @@ impl<'a> RenderCtx<'a> {
             geometry,
             now: std::time::Instant::now(),
             motion_policy: MotionPolicy::default(),
+            layout_target: None,
+            layout_managed: false,
         }
     }
 
@@ -352,6 +381,8 @@ impl<'a> RenderCtx<'a> {
             geometry,
             now,
             motion_policy,
+            layout_target: None,
+            layout_managed: false,
         }
     }
 
@@ -405,6 +436,11 @@ impl<'a> RenderCtx<'a> {
             .layout_snapshot(&self.current_path, channel)
     }
 
+    /// Read the current shared layout animation snapshot by shared id.
+    pub fn shared_layout_animation(&self, id: &str) -> Option<LayoutSnapshot> {
+        self.animation_store.shared_layout_snapshot(id)
+    }
+
     /// Read the current style animation value for this widget and channel.
     pub fn animation_style(&self, channel: &str) -> Option<Style> {
         self.animation_store.style(&self.current_path, channel)
@@ -419,6 +455,28 @@ impl<'a> RenderCtx<'a> {
         let (displayed, _) = store.borrow_mut().track_layout(
             &self.current_path,
             channel,
+            target,
+            transition,
+            self.now,
+            self.motion_policy,
+        );
+        displayed
+    }
+
+    /// Track a shared target area and return the animated display area.
+    pub fn track_shared_layout(
+        &self,
+        id: &str,
+        target: Area,
+        transition: LayoutTransition,
+    ) -> Area {
+        let AnimationStoreView::Mutable(store) = self.animation_store else {
+            return target;
+        };
+
+        let (displayed, _) = store.borrow_mut().track_shared_layout(
+            id,
+            &self.current_path,
             target,
             transition,
             self.now,
@@ -487,7 +545,125 @@ impl<'a> RenderCtx<'a> {
             geometry: self.geometry,
             now: self.now,
             motion_policy: self.motion_policy,
+            layout_target: None,
+            layout_managed: false,
         }
+    }
+
+    pub(crate) fn child_ctx_with_layout(
+        &self,
+        key: impl Into<WidgetKey>,
+        target: Area,
+    ) -> RenderCtx<'a> {
+        RenderCtx {
+            store: self.store,
+            animation_store: self.animation_store,
+            theme: self.theme,
+            focused_path: self.focused_path,
+            current_path: self.current_path.child(key),
+            geometry: self.geometry,
+            now: self.now,
+            motion_policy: self.motion_policy,
+            layout_target: Some(target),
+            layout_managed: true,
+        }
+    }
+
+    /// Return the logical target area when a parent container has already
+    /// applied a layout transition for this widget.
+    pub fn layout_target(&self) -> Option<Area> {
+        self.layout_target
+    }
+
+    pub(crate) fn layout_is_managed(&self) -> bool {
+        self.layout_managed
+    }
+
+    pub(crate) fn prepare_child_layout<M>(
+        &self,
+        key: WidgetKey,
+        child: &dyn Widget<M>,
+        target: Area,
+    ) -> (Area, RenderCtx<'a>, ClipMode) {
+        let path = self.current_path.child(key.clone());
+        self.geometry.borrow_mut().insert(path.clone(), target);
+
+        if let Some(shared) = child.shared_transition() {
+            let display = match self.animation_store {
+                AnimationStoreView::ReadOnly(_) => target,
+                AnimationStoreView::Mutable(store) => {
+                    store
+                        .borrow_mut()
+                        .track_shared_layout(
+                            &shared.id,
+                            &path,
+                            target,
+                            shared.layout,
+                            self.now,
+                            self.motion_policy,
+                        )
+                        .0
+                }
+            };
+            return (
+                display,
+                self.child_ctx_with_layout(key, target),
+                shared.layout.clip,
+            );
+        }
+
+        if let Some(transition) = child.layout_transition() {
+            let display = match self.animation_store {
+                AnimationStoreView::ReadOnly(_) => target,
+                AnimationStoreView::Mutable(store) => {
+                    store
+                        .borrow_mut()
+                        .track_layout(
+                            &path,
+                            "layout",
+                            target,
+                            transition,
+                            self.now,
+                            self.motion_policy,
+                        )
+                        .0
+                }
+            };
+            return (
+                display,
+                self.child_ctx_with_layout(key, target),
+                transition.clip,
+            );
+        }
+
+        (target, self.child_ctx(key), ClipMode::None)
+    }
+
+    pub(crate) fn render_child_at<M>(
+        &self,
+        chunk: &mut Chunk,
+        key: WidgetKey,
+        child: &dyn Widget<M>,
+        target: Area,
+    ) {
+        let (display, child_ctx, clip) = self.prepare_child_layout(key, child, target);
+        if display.width() == 0 || display.height() == 0 {
+            return;
+        }
+
+        let render_area = match clip {
+            ClipMode::None | ClipMode::ClipToAnimatedBounds => display,
+            ClipMode::ClipToTargetBounds => {
+                let Some(clipped) = display.clamp_to(&target) else {
+                    return;
+                };
+                clipped
+            }
+        };
+
+        let _ = chunk.with_clip(render_area, |child_chunk| {
+            child.render(child_chunk, &child_ctx);
+        });
     }
 
     /// The current widget path in the tree.

@@ -270,8 +270,12 @@ impl<M> Widget<M> for Stack<M> {
         ctx.record_bounds(area);
 
         for (index, child) in self.children.iter().enumerate() {
-            let child_ctx = ctx.child_ctx(WidgetKey::for_child(index, child.as_ref()));
-            child.render(chunk, &child_ctx);
+            ctx.render_child_at(
+                chunk,
+                WidgetKey::for_child(index, child.as_ref()),
+                child.as_ref(),
+                area,
+            );
         }
     }
 
@@ -495,8 +499,12 @@ impl<M> Widget<M> for Overlay<M> {
 
         ctx.record_bounds(area);
 
-        let base_ctx = ctx.child_ctx(WidgetKey::for_child(0, self.children[0].as_ref()));
-        self.children[0].render(chunk, &base_ctx);
+        ctx.render_child_at(
+            chunk,
+            WidgetKey::for_child(0, self.children[0].as_ref()),
+            self.children[0].as_ref(),
+            area,
+        );
 
         let mut layer_indices: Vec<usize> = (1..self.children.len()).collect();
         layer_indices.sort_by_key(|index| self.z_indices[*index]);
@@ -506,12 +514,13 @@ impl<M> Widget<M> for Overlay<M> {
             if layer_area.width() == 0 || layer_area.height() == 0 {
                 continue;
             }
-            if let Some(clamped) = layer_area.clamp_to(&area) {
-                if let Ok(mut child_chunk) = chunk.from_area(clamped) {
-                    let child_ctx =
-                        ctx.child_ctx(WidgetKey::for_child(index, self.children[index].as_ref()));
-                    self.children[index].render(&mut child_chunk, &child_ctx);
-                }
+            if layer_area.intersects(&area) {
+                ctx.render_child_at(
+                    chunk,
+                    WidgetKey::for_child(index, self.children[index].as_ref()),
+                    self.children[index].as_ref(),
+                    layer_area,
+                );
             }
         }
     }

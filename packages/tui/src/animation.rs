@@ -629,6 +629,25 @@ pub enum ClipMode {
     ClipToTargetBounds,
 }
 
+/// A shared area transition joins layout animation state across widget paths.
+///
+/// This is useful for "shared element" flows where a visual concept moves from
+/// one subtree to another, such as a selected list row becoming a detail panel.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SharedTransition {
+    pub id: String,
+    pub layout: LayoutTransition,
+}
+
+impl SharedTransition {
+    pub fn new(id: impl Into<String>, layout: LayoutTransition) -> Self {
+        Self {
+            id: id.into(),
+            layout,
+        }
+    }
+}
+
 /// A transition that is active at a specific timeline instant.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TimelineFrame {
@@ -957,6 +976,34 @@ struct TimelineAnimation {
     active: bool,
 }
 
+#[derive(Debug, Clone)]
+struct SharedLayoutAnimation {
+    path: WidgetPath,
+    layout: LayoutAnimation,
+}
+
+impl SharedLayoutAnimation {
+    fn new(path: WidgetPath, target: Area, transition: LayoutTransition, now: Instant) -> Self {
+        Self {
+            path,
+            layout: LayoutAnimation::new(target, transition, now),
+        }
+    }
+
+    fn update_to(
+        &mut self,
+        path: WidgetPath,
+        target: Area,
+        transition: LayoutTransition,
+        now: Instant,
+    ) -> bool {
+        let path_changed = self.path != path;
+        let changed = self.layout.update_to(target, transition, now);
+        self.path = path;
+        changed || path_changed
+    }
+}
+
 impl TimelineAnimation {
     fn new(timeline: Timeline, now: Instant) -> Self {
         let active = timeline
@@ -1061,6 +1108,7 @@ pub struct AnimationStore {
     pulses: HashMap<AnimationKey, PulseAnimation>,
     styles: HashMap<AnimationKey, StyleAnimation>,
     layouts: HashMap<AnimationKey, LayoutAnimation>,
+    shared_layouts: HashMap<String, SharedLayoutAnimation>,
     timelines: HashMap<AnimationKey, TimelineAnimation>,
 }
 
@@ -1080,6 +1128,12 @@ impl AnimationStore {
     pub fn layout_snapshot(&self, path: &WidgetPath, channel: &str) -> Option<LayoutSnapshot> {
         let key = AnimationKey::new(path, channel);
         self.layouts.get(&key).map(LayoutAnimation::snapshot)
+    }
+
+    pub fn shared_layout_snapshot(&self, id: &str) -> Option<LayoutSnapshot> {
+        self.shared_layouts
+            .get(id)
+            .map(|state| state.layout.snapshot())
     }
 
     pub fn style(&self, path: &WidgetPath, channel: &str) -> Option<Style> {
@@ -1213,6 +1267,35 @@ impl AnimationStore {
         (state.displayed.to_area(), changed || state.active)
     }
 
+    pub fn track_shared_layout(
+        &mut self,
+        id: &str,
+        path: &WidgetPath,
+        target: Area,
+        transition: LayoutTransition,
+        now: Instant,
+        motion_policy: MotionPolicy,
+    ) -> (Area, bool) {
+        let transition = LayoutTransition {
+            position: transition
+                .position
+                .map(|spec| motion_policy.effective_spec(spec)),
+            size: transition
+                .size
+                .map(|spec| motion_policy.effective_spec(spec)),
+            clip: transition.clip,
+        };
+        let state = self
+            .shared_layouts
+            .entry(id.to_owned())
+            .or_insert_with(|| SharedLayoutAnimation::new(path.clone(), target, transition, now));
+        let changed = state.update_to(path.clone(), target, transition, now);
+        (
+            state.layout.displayed.to_area(),
+            changed || state.layout.active,
+        )
+    }
+
     /// Advance tracks that are already active without changing their targets.
     pub fn advance(&mut self, now: Instant) -> bool {
         let mut active = false;
@@ -1238,6 +1321,10 @@ impl AnimationStore {
             active |= layout.advance(now);
         }
 
+        for shared in self.shared_layouts.values_mut() {
+            active |= shared.layout.advance(now);
+        }
+
         for style in self.styles.values_mut() {
             active |= style.advance(now);
         }
@@ -1252,6 +1339,10 @@ impl AnimationStore {
     pub fn has_active_animations(&self) -> bool {
         self.values.values().any(|value| value.active)
             || self.layouts.values().any(|layout| layout.active)
+            || self
+                .shared_layouts
+                .values()
+                .any(|layout| layout.layout.active)
             || self.styles.values().any(|style| style.active)
             || self.timelines.values().any(|timeline| timeline.active)
             || !self.pulses.is_empty()
@@ -1267,6 +1358,14 @@ impl AnimationStore {
         self.styles.retain(|key, _| is_active(&key.path));
         self.layouts.retain(|key, _| is_active(&key.path));
         self.timelines.retain(|key, _| is_active(&key.path));
+    }
+
+    pub fn retain_shared_layouts<F>(&mut self, mut is_active: F)
+    where
+        F: FnMut(&str) -> bool,
+    {
+        self.shared_layouts
+            .retain(|id, state| is_active(id) || state.layout.active);
     }
 }
 
@@ -1677,6 +1776,45 @@ mod tests {
         let snapshot = store.layout_snapshot(&path, "layout").unwrap();
         assert_eq!(snapshot.displayed.to_area().x(), 5);
         assert_eq!(snapshot.displayed.to_area().width(), 15);
+    }
+
+    #[test]
+    fn shared_layout_retargets_across_widget_paths() {
+        let mut store = AnimationStore::new();
+        let first_path = WidgetPath::root().child("list").child("row");
+        let second_path = WidgetPath::root().child("detail").child("card");
+        let start = Instant::now();
+        let spec = AnimationSpec::new(Duration::from_millis(100), Easing::Linear);
+        let transition = LayoutTransition::size_and_position(spec);
+        let first = Area::new((0, 0).into(), (10, 2).into());
+        let second = Area::new((20, 4).into(), (30, 8).into());
+
+        let (area, changed) = store.track_shared_layout(
+            "selection",
+            &first_path,
+            first,
+            transition,
+            start,
+            MotionPolicy::default(),
+        );
+        assert_eq!(area, first);
+        assert!(!changed);
+
+        let (area, changed) = store.track_shared_layout(
+            "selection",
+            &second_path,
+            second,
+            transition,
+            start,
+            MotionPolicy::default(),
+        );
+        assert_eq!(area, first);
+        assert!(changed);
+
+        assert!(store.advance(start + Duration::from_millis(50)));
+        let snapshot = store.shared_layout_snapshot("selection").unwrap();
+        assert_eq!(snapshot.displayed.to_area().x(), 10);
+        assert_eq!(snapshot.displayed.to_area().width(), 20);
     }
 
     #[test]

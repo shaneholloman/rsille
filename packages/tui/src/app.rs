@@ -1,5 +1,5 @@
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -556,16 +556,23 @@ impl<State, U, V, M: Send + 'static> AppRuntime<State, U, V, M> {
     fn retain_state_for_live_and_exiting_paths(&mut self) {
         let live_paths: Vec<WidgetPath> = self.focus.live_paths().iter().cloned().collect();
         let exiting_paths = self.exiting_paths();
+        let mut live_shared_ids = HashSet::new();
+        if let Some(tree) = self.cached_tree.as_ref() {
+            let mut path = WidgetPath::root();
+            Self::collect_shared_transition_ids(tree.as_ref(), &mut path, &mut live_shared_ids);
+        }
         let should_retain = |path: &WidgetPath| {
             live_paths.iter().any(|live| live == path)
                 || exiting_paths.iter().any(|exit| path.starts_with(exit))
         };
 
         self.store.retain_active(should_retain);
-        self.animation_store.borrow_mut().retain_active(|path| {
+        let mut animation_store = self.animation_store.borrow_mut();
+        animation_store.retain_active(|path| {
             live_paths.iter().any(|live| live == path)
                 || exiting_paths.iter().any(|exit| path.starts_with(exit))
         });
+        animation_store.retain_shared_layouts(|id| live_shared_ids.contains(id));
     }
 
     fn collect_presence_declarations(
@@ -580,6 +587,22 @@ impl<State, U, V, M: Send + 'static> AppRuntime<State, U, V, M> {
         for (index, child) in widget.children().iter().enumerate() {
             path.push(WidgetKey::for_child(index, child.as_ref()));
             Self::collect_presence_declarations(child.as_ref(), path, declarations);
+            path.pop();
+        }
+    }
+
+    fn collect_shared_transition_ids(
+        widget: &dyn Widget<M>,
+        path: &mut WidgetPath,
+        ids: &mut HashSet<String>,
+    ) {
+        if let Some(shared) = widget.shared_transition() {
+            ids.insert(shared.id.clone());
+        }
+
+        for (index, child) in widget.children().iter().enumerate() {
+            path.push(WidgetKey::for_child(index, child.as_ref()));
+            Self::collect_shared_transition_ids(child.as_ref(), path, ids);
             path.pop();
         }
     }

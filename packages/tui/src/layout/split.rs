@@ -249,15 +249,19 @@ impl<M> Widget<M> for Split<M> {
             return;
         };
 
-        if let Ok(mut first_chunk) = chunk.from_area(layout.first) {
-            let child_ctx = ctx.child_ctx(WidgetKey::for_child(0, self.children[0].as_ref()));
-            self.children[0].render(&mut first_chunk, &child_ctx);
-        }
+        ctx.render_child_at(
+            chunk,
+            WidgetKey::for_child(0, self.children[0].as_ref()),
+            self.children[0].as_ref(),
+            layout.first,
+        );
 
-        if let Ok(mut second_chunk) = chunk.from_area(layout.second) {
-            let child_ctx = ctx.child_ctx(WidgetKey::for_child(1, self.children[1].as_ref()));
-            self.children[1].render(&mut second_chunk, &child_ctx);
-        }
+        ctx.render_child_at(
+            chunk,
+            WidgetKey::for_child(1, self.children[1].as_ref()),
+            self.children[1].as_ref(),
+            layout.second,
+        );
 
         if let Ok(mut divider_chunk) = chunk.from_area(layout.divider) {
             let divider_style = self

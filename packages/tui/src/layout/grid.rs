@@ -299,10 +299,12 @@ impl<M> Widget<M> for Grid<M> {
                 continue;
             }
 
-            if let Ok(mut child_chunk) = chunk.from_area(*child_area) {
-                let child_ctx = ctx.child_ctx(WidgetKey::for_child(index, child.as_ref()));
-                child.render(&mut child_chunk, &child_ctx);
-            }
+            ctx.render_child_at(
+                chunk,
+                WidgetKey::for_child(index, child.as_ref()),
+                child.as_ref(),
+                *child_area,
+            );
         }
     }
 

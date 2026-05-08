@@ -63,6 +63,14 @@ name = "animation"
 path = "examples/widgets/animation.rs"
 
 [[example]]
+name = "layout_animation"
+path = "examples/widgets/layout_animation.rs"
+
+[[example]]
+name = "presence_animation"
+path = "examples/widgets/presence_animation.rs"
+
+[[example]]
 name = "content_viewers"
 path = "examples/widgets/content_viewers.rs"
 

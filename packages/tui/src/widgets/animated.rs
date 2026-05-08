@@ -3,8 +3,8 @@
 use render::area::Area;
 
 use crate::animation::{
-    AnimationSpec, ClipMode, InitialAnimation, LayoutTransition, Presence, Timeline, TimelineFrame,
-    TransitionEffect,
+    AnimationSpec, ClipMode, InitialAnimation, LayoutTransition, Presence, SharedTransition,
+    Timeline, TimelineFrame, TransitionEffect,
 };
 use crate::focus::FocusConfig;
 use crate::layout::Constraints;
@@ -23,6 +23,7 @@ pub fn animate<M>(child: impl IntoWidget<M>) -> Animated<M> {
 pub struct Animated<M = ()> {
     child: Box<dyn Widget<M>>,
     layout_transition: Option<LayoutTransition>,
+    shared_transition: Option<SharedTransition>,
     presence: Presence,
     widget_key: Option<String>,
 }
@@ -41,6 +42,7 @@ impl<M> Animated<M> {
         Self {
             child: child.into_widget(),
             layout_transition: None,
+            shared_transition: None,
             presence: Presence::default(),
             widget_key: None,
         }
@@ -52,12 +54,37 @@ impl<M> Animated<M> {
     }
 
     pub fn layout(mut self, spec: AnimationSpec) -> Self {
-        self.layout_transition = Some(LayoutTransition::size_and_position(spec));
+        let transition = LayoutTransition::size_and_position(spec);
+        self.layout_transition = Some(transition);
+        if let Some(shared) = self.shared_transition.as_mut() {
+            shared.layout = transition;
+        }
         self
     }
 
     pub fn layout_transition(mut self, transition: LayoutTransition) -> Self {
         self.layout_transition = Some(transition);
+        if let Some(shared) = self.shared_transition.as_mut() {
+            shared.layout = transition;
+        }
+        self
+    }
+
+    pub fn shared(mut self, id: impl Into<String>) -> Self {
+        self.shared_transition = Some(SharedTransition::new(
+            id,
+            self.layout_transition
+                .unwrap_or_else(|| LayoutTransition::size_and_position(AnimationSpec::normal())),
+        ));
+        self
+    }
+
+    pub fn shared_transition(
+        mut self,
+        id: impl Into<String>,
+        transition: LayoutTransition,
+    ) -> Self {
+        self.shared_transition = Some(SharedTransition::new(id, transition));
         self
     }
 
@@ -133,18 +160,31 @@ impl<M> Animated<M> {
 
 impl<M> Widget<M> for Animated<M> {
     fn render(&self, chunk: &mut render::chunk::Chunk, ctx: &RenderCtx) {
-        let target = chunk.area();
+        let target = ctx.layout_target().unwrap_or_else(|| chunk.area());
         if target.width() == 0 || target.height() == 0 {
             return;
         }
 
         ctx.record_bounds(target);
 
-        let (mut display_area, clip) = if let Some(transition) = self.layout_transition {
-            (
-                ctx.track_layout("layout", target, transition),
-                transition.clip,
-            )
+        let (mut display_area, clip) = if let Some(shared) = self.shared_transition.as_ref() {
+            if ctx.layout_is_managed() {
+                (chunk.area(), shared.layout.clip)
+            } else {
+                (
+                    ctx.track_shared_layout(&shared.id, target, shared.layout),
+                    shared.layout.clip,
+                )
+            }
+        } else if let Some(transition) = self.layout_transition {
+            if ctx.layout_is_managed() {
+                (chunk.area(), transition.clip)
+            } else {
+                (
+                    ctx.track_layout("layout", target, transition),
+                    transition.clip,
+                )
+            }
         } else {
             (target, ClipMode::None)
         };
@@ -162,6 +202,14 @@ impl<M> Widget<M> for Animated<M> {
 
     fn presence(&self) -> Option<&Presence> {
         Some(&self.presence)
+    }
+
+    fn layout_transition(&self) -> Option<LayoutTransition> {
+        self.layout_transition
+    }
+
+    fn shared_transition(&self) -> Option<&SharedTransition> {
+        self.shared_transition.as_ref()
     }
 
     fn focus_config(&self) -> FocusConfig {
