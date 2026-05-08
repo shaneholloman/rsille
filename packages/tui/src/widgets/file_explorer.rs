@@ -1,4 +1,4 @@
-//! Tree widget with expandable nodes and internal navigation.
+//! File explorer widget with tree navigation.
 
 use rustc_hash::FxHashSet;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
@@ -12,33 +12,43 @@ use crate::widget::{EventCtx, EventPhase, RenderCtx, Widget};
 
 use super::selection::{SelectionMode, SelectionState};
 
-/// A node in the tree widget.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FileExplorerItemKind {
+    File,
+    Directory,
+    LazyDirectory,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TreeItem {
+pub struct FileExplorerItem {
     pub id: String,
     pub label: String,
-    pub children: Vec<TreeItem>,
+    pub kind: FileExplorerItemKind,
+    pub children: Vec<FileExplorerItem>,
     pub disabled: bool,
 }
 
-impl TreeItem {
-    pub fn new(id: impl Into<String>, label: impl Into<String>) -> Self {
-        Self {
-            id: id.into(),
-            label: label.into(),
-            children: Vec::new(),
-            disabled: false,
-        }
+impl FileExplorerItem {
+    pub fn file(id: impl Into<String>, label: impl Into<String>) -> Self {
+        Self::new(id, label, FileExplorerItemKind::File)
     }
 
-    pub fn child(mut self, child: TreeItem) -> Self {
+    pub fn directory(id: impl Into<String>, label: impl Into<String>) -> Self {
+        Self::new(id, label, FileExplorerItemKind::Directory)
+    }
+
+    pub fn lazy_directory(id: impl Into<String>, label: impl Into<String>) -> Self {
+        Self::new(id, label, FileExplorerItemKind::LazyDirectory)
+    }
+
+    pub fn child(mut self, child: FileExplorerItem) -> Self {
         self.children.push(child);
         self
     }
 
     pub fn children<I>(mut self, children: I) -> Self
     where
-        I: IntoIterator<Item = TreeItem>,
+        I: IntoIterator<Item = FileExplorerItem>,
     {
         self.children.extend(children);
         self
@@ -48,11 +58,20 @@ impl TreeItem {
         self.disabled = disabled;
         self
     }
+
+    fn new(id: impl Into<String>, label: impl Into<String>, kind: FileExplorerItemKind) -> Self {
+        Self {
+            id: id.into(),
+            label: label.into(),
+            kind,
+            children: Vec::new(),
+            disabled: false,
+        }
+    }
 }
 
-/// Persistent tree widget state stored in the widget store.
 #[derive(Debug, Clone, Default)]
-pub struct TreeState {
+pub struct FileExplorerState {
     pub active_item: Option<String>,
     pub expanded_items: FxHashSet<String>,
     pub selection: SelectionState,
@@ -60,61 +79,60 @@ pub struct TreeState {
 }
 
 #[derive(Debug, Clone)]
-struct VisibleTreeRow {
+struct VisibleFileRow {
     id: String,
     label: String,
     depth: usize,
     parent_id: Option<String>,
-    has_children: bool,
+    kind: FileExplorerItemKind,
     is_expanded: bool,
     disabled: bool,
 }
 
-/// Focusable tree widget with expandable nodes and keyboard navigation.
-pub struct Tree<M = ()> {
-    items: Vec<TreeItem>,
+pub struct FileExplorer<M = ()> {
+    items: Vec<FileExplorerItem>,
     height: u16,
     border: Option<BorderStyle>,
     disabled: bool,
-    empty_message: String,
     selection_mode: SelectionMode,
     custom_style: Option<Style>,
     custom_focus_style: Option<Style>,
     on_change: Option<Box<dyn Fn(String) -> M>>,
-    on_submit: Option<Box<dyn Fn(String) -> M>>,
+    on_open: Option<Box<dyn Fn(String) -> M>>,
+    on_load_children: Option<Box<dyn Fn(String) -> M>>,
     on_selection_change: Option<Box<dyn Fn(Vec<String>) -> M>>,
     widget_key: Option<String>,
 }
 
-impl<M> std::fmt::Debug for Tree<M> {
+impl<M> std::fmt::Debug for FileExplorer<M> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Tree")
+        f.debug_struct("FileExplorer")
             .field("items", &self.items)
             .field("height", &self.height)
             .field("border", &self.border)
             .field("disabled", &self.disabled)
-            .field("empty_message", &self.empty_message)
             .field("selection_mode", &self.selection_mode)
             .field("on_change", &self.on_change.is_some())
-            .field("on_submit", &self.on_submit.is_some())
+            .field("on_open", &self.on_open.is_some())
+            .field("on_load_children", &self.on_load_children.is_some())
             .field("on_selection_change", &self.on_selection_change.is_some())
             .finish()
     }
 }
 
-impl<M> Tree<M> {
+impl<M> FileExplorer<M> {
     pub fn new() -> Self {
         Self {
             items: Vec::new(),
-            height: 10,
+            height: 12,
             border: Some(BorderStyle::Single),
             disabled: false,
-            empty_message: "No items".to_owned(),
             selection_mode: SelectionMode::Single,
             custom_style: None,
             custom_focus_style: None,
             on_change: None,
-            on_submit: None,
+            on_open: None,
+            on_load_children: None,
             on_selection_change: None,
             widget_key: None,
         }
@@ -125,21 +143,21 @@ impl<M> Tree<M> {
         self
     }
 
-    pub fn item(mut self, item: TreeItem) -> Self {
+    pub fn item(mut self, item: FileExplorerItem) -> Self {
         self.items.push(item);
         self
     }
 
     pub fn items<I>(mut self, items: I) -> Self
     where
-        I: IntoIterator<Item = TreeItem>,
+        I: IntoIterator<Item = FileExplorerItem>,
     {
         self.items.extend(items);
         self
     }
 
     pub fn height(mut self, height: u16) -> Self {
-        self.height = height.max(4);
+        self.height = height.max(1);
         self
     }
 
@@ -155,11 +173,6 @@ impl<M> Tree<M> {
 
     pub fn disabled(mut self, disabled: bool) -> Self {
         self.disabled = disabled;
-        self
-    }
-
-    pub fn empty_message(mut self, message: impl Into<String>) -> Self {
-        self.empty_message = message.into();
         self
     }
 
@@ -195,11 +208,19 @@ impl<M> Tree<M> {
         self
     }
 
-    pub fn on_submit<F>(mut self, handler: F) -> Self
+    pub fn on_open<F>(mut self, handler: F) -> Self
     where
         F: Fn(String) -> M + 'static,
     {
-        self.on_submit = Some(Box::new(handler));
+        self.on_open = Some(Box::new(handler));
+        self
+    }
+
+    pub fn on_load_children<F>(mut self, handler: F) -> Self
+    where
+        F: Fn(String) -> M + 'static,
+    {
+        self.on_load_children = Some(Box::new(handler));
         self
     }
 
@@ -215,7 +236,7 @@ impl<M> Tree<M> {
         self.items.iter().any(Self::has_enabled_in_subtree)
     }
 
-    fn has_enabled_in_subtree(item: &TreeItem) -> bool {
+    fn has_enabled_in_subtree(item: &FileExplorerItem) -> bool {
         !item.disabled || item.children.iter().any(Self::has_enabled_in_subtree)
     }
 
@@ -224,7 +245,7 @@ impl<M> Tree<M> {
         self.height.saturating_sub(border_padding as u16) as usize
     }
 
-    fn flatten_visible_rows(&self, expanded: &FxHashSet<String>) -> Vec<VisibleTreeRow> {
+    fn flatten_visible_rows(&self, expanded: &FxHashSet<String>) -> Vec<VisibleFileRow> {
         let mut rows = Vec::new();
         for item in &self.items {
             Self::collect_rows(item, 0, None, expanded, &mut rows);
@@ -233,19 +254,19 @@ impl<M> Tree<M> {
     }
 
     fn collect_rows(
-        item: &TreeItem,
+        item: &FileExplorerItem,
         depth: usize,
         parent_id: Option<&str>,
         expanded: &FxHashSet<String>,
-        rows: &mut Vec<VisibleTreeRow>,
+        rows: &mut Vec<VisibleFileRow>,
     ) {
         let is_expanded = expanded.contains(&item.id);
-        rows.push(VisibleTreeRow {
+        rows.push(VisibleFileRow {
             id: item.id.clone(),
             label: item.label.clone(),
             depth,
             parent_id: parent_id.map(str::to_owned),
-            has_children: !item.children.is_empty(),
+            kind: item.kind,
             is_expanded,
             disabled: item.disabled,
         });
@@ -257,14 +278,20 @@ impl<M> Tree<M> {
         }
     }
 
-    fn active_index_from_state(&self, state: &TreeState, rows: &[VisibleTreeRow]) -> Option<usize> {
-        active_item_id(state)
-            .as_deref()
+    fn active_index_from_state(
+        &self,
+        state: &FileExplorerState,
+        rows: &[VisibleFileRow],
+    ) -> Option<usize> {
+        state
+            .selection
+            .cursor()
+            .or(state.active_item.as_deref())
             .and_then(|id| rows.iter().position(|row| row.id == id && !row.disabled))
             .or_else(|| rows.iter().position(|row| !row.disabled))
     }
 
-    fn next_enabled_index(rows: &[VisibleTreeRow], current: usize) -> Option<usize> {
+    fn next_enabled_index(rows: &[VisibleFileRow], current: usize) -> Option<usize> {
         rows.iter()
             .enumerate()
             .skip(current.saturating_add(1))
@@ -272,7 +299,7 @@ impl<M> Tree<M> {
             .map(|(index, _)| index)
     }
 
-    fn prev_enabled_index(rows: &[VisibleTreeRow], current: usize) -> Option<usize> {
+    fn prev_enabled_index(rows: &[VisibleFileRow], current: usize) -> Option<usize> {
         rows.iter()
             .enumerate()
             .take(current)
@@ -281,66 +308,41 @@ impl<M> Tree<M> {
             .map(|(index, _)| index)
     }
 
-    fn truncate_to_width(text: &str, max_width: usize) -> String {
-        let mut out = String::new();
-        let mut width = 0;
-
-        for ch in text.chars() {
-            let char_width = ch.width().unwrap_or(0);
-            if width + char_width > max_width {
-                break;
-            }
-            out.push(ch);
-            width += char_width;
-        }
-
-        out
-    }
-
-    fn render_row_text(row: &VisibleTreeRow, width: usize) -> String {
+    fn render_row_text(row: &VisibleFileRow, width: usize) -> String {
         let indent = "  ".repeat(row.depth);
-        let marker = if row.has_children {
-            if row.is_expanded {
-                "- "
-            } else {
-                "+ "
-            }
-        } else {
-            "  "
+        let marker = match row.kind {
+            FileExplorerItemKind::File => "  ",
+            FileExplorerItemKind::Directory if row.is_expanded => "- ",
+            FileExplorerItemKind::Directory => "+ ",
+            FileExplorerItemKind::LazyDirectory if row.is_expanded => "~ ",
+            FileExplorerItemKind::LazyDirectory => "+ ",
         };
         let available = width.saturating_sub(indent.width() + marker.width());
-        let label = Self::truncate_to_width(&row.label, available);
+        let label = truncate_to_width(&row.label, available);
         format!("{indent}{marker}{label}")
     }
 }
 
-impl<M> Default for Tree<M> {
+impl<M> Default for FileExplorer<M> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<M: 'static> Widget<M> for Tree<M> {
+impl<M: 'static> Widget<M> for FileExplorer<M> {
     fn render(&self, chunk: &mut render::chunk::Chunk, ctx: &RenderCtx) {
         let area = chunk.area();
         if area.width() == 0 || area.height() == 0 {
             return;
         }
 
-        let is_focused = ctx.is_focused();
         let theme = ctx.theme();
-        let base_style = if self.disabled {
-            theme.styles.interactive_disabled
-        } else {
-            theme.styles.surface_elevated
-        };
         let row_style = self
             .custom_style
-            .as_ref()
-            .map(|style| style.merge(base_style))
-            .unwrap_or(base_style)
+            .map(|style| style.merge(theme.styles.surface_elevated))
+            .unwrap_or(theme.styles.surface_elevated)
             .to_render_style();
-        let active_style = if is_focused {
+        let active_style = if ctx.is_focused() {
             self.custom_focus_style
                 .unwrap_or(theme.styles.selected_focused)
         } else {
@@ -350,35 +352,28 @@ impl<M: 'static> Widget<M> for Tree<M> {
         let selected_style = theme.styles.selected.to_render_style();
         let disabled_style = theme.styles.interactive_disabled.to_render_style();
         let muted_style = theme.styles.text_muted.to_render_style();
-        let border_style = if is_focused {
+        let border_style = if ctx.is_focused() {
             theme.styles.border_focused.to_render_style()
         } else {
             theme.styles.border.to_render_style()
         };
 
         let _ = chunk.fill(0, 0, area.width(), area.height(), ' ', row_style);
-
         let (content_x, content_y, content_width, content_height) =
             if let Some(border) = self.border {
                 if area.width() < 2 || area.height() < 2 {
                     return;
                 }
                 border_renderer::render_border(chunk, border, border_style);
-                (1u16, 1u16, area.width() - 2, area.height() - 2)
+                (1, 1, area.width() - 2, area.height() - 2)
             } else {
-                (0u16, 0u16, area.width(), area.height())
+                (0, 0, area.width(), area.height())
             };
 
-        if content_width == 0 || content_height == 0 {
-            return;
-        }
-
-        let state = ctx.state_or_default::<TreeState>();
+        let state = ctx.state_or_default::<FileExplorerState>();
         let rows = self.flatten_visible_rows(&state.expanded_items);
-
         if rows.is_empty() {
-            let message = Self::truncate_to_width(&self.empty_message, content_width as usize);
-            let _ = chunk.set_string(content_x, content_y, &message, muted_style);
+            let _ = chunk.set_string(content_x, content_y, "No files", muted_style);
             return;
         }
 
@@ -407,7 +402,6 @@ impl<M: 'static> Widget<M> for Tree<M> {
             } else {
                 row_style
             };
-
             let y = content_y + row as u16;
             let _ = chunk.fill(content_x, y, content_width, 1, ' ', style);
             let text = Self::render_row_text(row_item, content_width as usize);
@@ -426,10 +420,15 @@ impl<M: 'static> Widget<M> for Tree<M> {
 
         let visible_rows = self.visible_rows().max(1);
         let mut moved = false;
-        let mut emit_submit = None;
+        let mut emit_open = None;
+        let mut emit_load = None;
+        let mut emit_selection = None;
 
         let next_active_id = {
-            let state = ctx.state_mut::<TreeState>();
+            let state = ctx.state_mut::<FileExplorerState>();
+            if state.selection.cursor.is_none() {
+                state.selection.cursor = state.active_item.clone();
+            }
             let rows = self.flatten_visible_rows(&state.expanded_items);
             let Some(mut active_index) = self.active_index_from_state(state, &rows) else {
                 return;
@@ -449,65 +448,54 @@ impl<M: 'static> Widget<M> for Tree<M> {
                     }
                 }
                 KeyCode::Home => {
-                    if let Some(index) = rows.iter().position(|row| !row.disabled) {
-                        active_index = index;
-                        moved = true;
-                    }
+                    active_index = rows
+                        .iter()
+                        .position(|row| !row.disabled)
+                        .unwrap_or(active_index);
+                    moved = true;
                 }
                 KeyCode::End => {
-                    if let Some(index) = rows.iter().rposition(|row| !row.disabled) {
-                        active_index = index;
-                        moved = true;
-                    }
+                    active_index = rows
+                        .iter()
+                        .rposition(|row| !row.disabled)
+                        .unwrap_or(active_index);
+                    moved = true;
                 }
                 KeyCode::PageUp => {
-                    for _ in 0..visible_rows {
-                        if let Some(index) = Self::prev_enabled_index(&rows, active_index) {
-                            active_index = index;
-                            moved = true;
-                        } else {
-                            break;
-                        }
-                    }
+                    active_index = active_index.saturating_sub(visible_rows);
+                    moved = true;
                 }
                 KeyCode::PageDown => {
-                    for _ in 0..visible_rows {
-                        if let Some(index) = Self::next_enabled_index(&rows, active_index) {
-                            active_index = index;
-                            moved = true;
-                        } else {
-                            break;
-                        }
-                    }
+                    active_index = (active_index + visible_rows).min(rows.len().saturating_sub(1));
+                    moved = true;
                 }
                 KeyCode::Right => {
                     let row = &rows[active_index];
-                    if row.has_children && !row.is_expanded {
-                        state.expanded_items.insert(row.id.clone());
-                    } else if row.has_children {
-                        if let Some(index) = rows
-                            .iter()
-                            .enumerate()
-                            .skip(active_index + 1)
-                            .find(|(_, candidate)| {
-                                candidate.parent_id.as_deref() == Some(row.id.as_str())
-                                    && !candidate.disabled
-                            })
-                            .map(|(index, _)| index)
-                        {
-                            active_index = index;
-                            moved = true;
+                    match row.kind {
+                        FileExplorerItemKind::Directory => {
+                            state.expanded_items.insert(row.id.clone());
                         }
+                        FileExplorerItemKind::LazyDirectory => {
+                            state.expanded_items.insert(row.id.clone());
+                            emit_load = self
+                                .on_load_children
+                                .as_ref()
+                                .map(|handler| handler(row.id.clone()));
+                        }
+                        FileExplorerItemKind::File => {}
                     }
                 }
                 KeyCode::Left => {
                     let row = &rows[active_index];
-                    if row.has_children && row.is_expanded {
+                    if matches!(
+                        row.kind,
+                        FileExplorerItemKind::Directory | FileExplorerItemKind::LazyDirectory
+                    ) && row.is_expanded
+                    {
                         state.expanded_items.remove(&row.id);
                     } else if let Some(parent_id) = row.parent_id.as_deref() {
-                        if let Some(index) = rows
-                            .iter()
-                            .position(|candidate| candidate.id == parent_id && !candidate.disabled)
+                        if let Some(index) =
+                            rows.iter().position(|candidate| candidate.id == parent_id)
                         {
                             active_index = index;
                             moved = true;
@@ -517,39 +505,34 @@ impl<M: 'static> Widget<M> for Tree<M> {
                 KeyCode::Char(' ') if self.selection_mode.is_multiple() => {
                     let row = &rows[active_index];
                     state.selection.toggle(&row.id);
-                    let emit_selection = self
+                    emit_selection = self
                         .on_selection_change
                         .as_ref()
                         .map(|handler| handler(state.selection.selected.clone()));
-                    ctx.set_handled();
-                    if let Some(message) = emit_selection {
-                        ctx.emit(message);
-                    }
-                    return;
                 }
-                KeyCode::Enter | KeyCode::Char(' ') => {
+                KeyCode::Enter => {
                     let row = &rows[active_index];
-                    if row.has_children {
-                        if row.is_expanded {
-                            state.expanded_items.remove(&row.id);
-                        } else {
-                            state.expanded_items.insert(row.id.clone());
+                    match row.kind {
+                        FileExplorerItemKind::File => {
+                            state.selection.replace_selection(row.id.clone());
+                            emit_open =
+                                self.on_open.as_ref().map(|handler| handler(row.id.clone()));
                         }
-                        ctx.set_handled();
-                        return;
+                        FileExplorerItemKind::Directory => {
+                            if row.is_expanded {
+                                state.expanded_items.remove(&row.id);
+                            } else {
+                                state.expanded_items.insert(row.id.clone());
+                            }
+                        }
+                        FileExplorerItemKind::LazyDirectory => {
+                            state.expanded_items.insert(row.id.clone());
+                            emit_load = self
+                                .on_load_children
+                                .as_ref()
+                                .map(|handler| handler(row.id.clone()));
+                        }
                     }
-
-                    if let Some(ref handler) = self.on_submit {
-                        emit_submit = Some(handler(row.id.clone()));
-                    }
-                    if self.selection_mode == SelectionMode::Single {
-                        state.selection.replace_selection(row.id.clone());
-                    }
-                    ctx.set_handled();
-                    if let Some(message) = emit_submit {
-                        ctx.emit(message);
-                    }
-                    return;
                 }
                 _ => return,
             }
@@ -557,21 +540,10 @@ impl<M: 'static> Widget<M> for Tree<M> {
             let rows = self.flatten_visible_rows(&state.expanded_items);
             if rows.is_empty() {
                 state.active_item = None;
+                state.selection.set_cursor(None);
                 return;
             }
-
-            if active_index >= rows.len() {
-                active_index = rows.len() - 1;
-            }
-
-            if rows[active_index].disabled {
-                if let Some(index) = Self::next_enabled_index(&rows, active_index)
-                    .or_else(|| Self::prev_enabled_index(&rows, active_index))
-                {
-                    active_index = index;
-                }
-            }
-
+            active_index = active_index.min(rows.len().saturating_sub(1));
             state.active_item = Some(rows[active_index].id.clone());
             state.selection.set_cursor(state.active_item.clone());
             state.scroll_offset =
@@ -579,30 +551,26 @@ impl<M: 'static> Widget<M> for Tree<M> {
             state.active_item.clone()
         };
 
+        ctx.set_handled();
         if moved {
-            ctx.set_handled();
             if let (Some(active_id), Some(handler)) = (next_active_id, self.on_change.as_ref()) {
                 ctx.emit(handler(active_id));
             }
         }
+        if let Some(message) = emit_open {
+            ctx.emit(message);
+        }
+        if let Some(message) = emit_load {
+            ctx.emit(message);
+        }
+        if let Some(message) = emit_selection {
+            ctx.emit(message);
+        }
     }
 
     fn constraints(&self) -> Constraints {
-        fn deepest_width(items: &[TreeItem], depth: usize) -> u16 {
-            items
-                .iter()
-                .map(|item| {
-                    let own = (depth * 2) as u16 + item.label.width() as u16 + 2;
-                    own.max(deepest_width(&item.children, depth + 1))
-                })
-                .max()
-                .unwrap_or(12)
-        }
-
-        let border_size = if self.border.is_some() { 2 } else { 0 };
-
         Constraints {
-            min_width: deepest_width(&self.items, 0) + border_size,
+            min_width: 24,
             max_width: None,
             min_height: self.height,
             max_height: Some(self.height),
@@ -623,15 +591,22 @@ impl<M: 'static> Widget<M> for Tree<M> {
     }
 }
 
-/// Create a new tree widget.
-pub fn tree<M>() -> Tree<M> {
-    Tree::new()
+fn truncate_to_width(text: &str, max_width: usize) -> String {
+    let mut out = String::new();
+    let mut width = 0;
+
+    for ch in text.chars() {
+        let char_width = ch.width().unwrap_or(0);
+        if width + char_width > max_width {
+            break;
+        }
+        out.push(ch);
+        width += char_width;
+    }
+
+    out
 }
 
-fn active_item_id(state: &TreeState) -> Option<String> {
-    state
-        .selection
-        .cursor
-        .clone()
-        .or_else(|| state.active_item.clone())
+pub fn file_explorer<M>() -> FileExplorer<M> {
+    FileExplorer::new()
 }

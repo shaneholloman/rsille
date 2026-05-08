@@ -39,6 +39,10 @@ name = "async"
 path = "examples/apps/async.rs"
 
 [[example]]
+name = "command_palette"
+path = "examples/apps/command_palette.rs"
+
+[[example]]
 name = "shell"
 path = "examples/apps/shell.rs"
 
@@ -55,8 +59,16 @@ name = "controls"
 path = "examples/widgets/controls.rs"
 
 [[example]]
+name = "content_viewers"
+path = "examples/widgets/content_viewers.rs"
+
+[[example]]
 name = "data_table"
 path = "examples/widgets/data_table.rs"
+
+[[example]]
+name = "file_explorer"
+path = "examples/widgets/file_explorer.rs"
 
 [[example]]
 name = "list"

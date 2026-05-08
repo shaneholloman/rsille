@@ -10,11 +10,15 @@ use tui::prelude::*;
 #[derive(Debug, Default)]
 struct State {
     palette_open: bool,
+    palette_active: String,
+    palette_ran: String,
 }
 
 #[derive(Debug, Clone)]
 enum Msg {
     TogglePalette,
+    PaletteChanged(String),
+    PaletteRun(String),
 }
 
 fn main() -> WidgetResult<()> {
@@ -27,6 +31,11 @@ fn main() -> WidgetResult<()> {
 fn update(state: &mut State, msg: Msg) {
     match msg {
         Msg::TogglePalette => state.palette_open = !state.palette_open,
+        Msg::PaletteChanged(id) => state.palette_active = id,
+        Msg::PaletteRun(id) => {
+            state.palette_ran = id;
+            state.palette_open = false;
+        }
     }
 }
 
@@ -60,9 +69,9 @@ fn view(state: &State) -> impl Widget<Msg> {
     if state.palette_open {
         overlay_root = overlay_root
             .layer(
-                OverlayLayer::new(command_palette())
+                OverlayLayer::new(command_palette_widget())
                     .floating(OverlayAnchor::Center)
-                    .size(44, 9)
+                    .size(48, 12)
                     .z_index(20),
             )
             .trap_focus();
@@ -120,16 +129,22 @@ fn help_popup() -> impl Widget<Msg> {
         ))
 }
 
-fn command_palette() -> impl Widget<Msg> {
-    col::<Msg>()
-        .border(BorderStyle::Double)
-        .padding(Padding::uniform(1))
-        .style(Style::default().bg(Color::Rgb(22, 28, 36)))
-        .child(label("Command Palette").bold())
-        .child(divider())
-        .child(label("overlay + trap_focus gives you a modal-style layer."))
-        .child(label("Press `p` again to close it."))
-        .child(label(
-            "The split under it stays mounted and keeps its pane size.",
-        ))
+fn command_palette_widget() -> impl Widget<Msg> {
+    command_palette::<Msg>()
+        .key("command-palette")
+        .height(12)
+        .title("Command Palette")
+        .search_mode(SelectSearchMode::Fuzzy)
+        .items([
+            CommandItem::new("open-sidebar", "Open sidebar").keywords(["sidebar", "left panel"]),
+            CommandItem::new("toggle-scrollbars", "Toggle scrollbars")
+                .keywords(["scroll", "viewport"]),
+            CommandItem::new("show-overlay-help", "Show overlay help")
+                .keywords(["overlay", "popup", "tooltip"]),
+            CommandItem::new("focus-workspace", "Focus workspace split")
+                .keywords(["focus", "pane", "split"]),
+        ])
+        .on_change(Msg::PaletteChanged)
+        .on_submit(Msg::PaletteRun)
+        .on_close(|| Msg::TogglePalette)
 }

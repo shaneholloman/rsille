@@ -9,6 +9,8 @@ use crate::layout::{ensure_item_visible, Constraints};
 use crate::style::{BorderStyle, Style};
 use crate::widget::{EventCtx, EventPhase, RenderCtx, Widget};
 
+use super::selection::{SelectionMode, SelectionState};
+
 /// A single list item.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ListItem {
@@ -48,6 +50,7 @@ impl From<String> for ListItem {
 #[derive(Debug, Clone, Default)]
 pub struct ListState {
     pub active_item: Option<String>,
+    pub selection: SelectionState,
     pub scroll_offset: usize,
 }
 
@@ -57,10 +60,12 @@ pub struct List<M = ()> {
     height: u16,
     border: Option<BorderStyle>,
     disabled: bool,
+    selection_mode: SelectionMode,
     custom_style: Option<Style>,
     custom_focus_style: Option<Style>,
     on_change: Option<Box<dyn Fn(String) -> M>>,
     on_submit: Option<Box<dyn Fn(String) -> M>>,
+    on_selection_change: Option<Box<dyn Fn(Vec<String>) -> M>>,
     widget_key: Option<String>,
 }
 
@@ -71,8 +76,10 @@ impl<M> std::fmt::Debug for List<M> {
             .field("height", &self.height)
             .field("border", &self.border)
             .field("disabled", &self.disabled)
+            .field("selection_mode", &self.selection_mode)
             .field("on_change", &self.on_change.is_some())
             .field("on_submit", &self.on_submit.is_some())
+            .field("on_selection_change", &self.on_selection_change.is_some())
             .finish()
     }
 }
@@ -84,10 +91,12 @@ impl<M> List<M> {
             height: 6,
             border: Some(BorderStyle::Single),
             disabled: false,
+            selection_mode: SelectionMode::Single,
             custom_style: None,
             custom_focus_style: None,
             on_change: None,
             on_submit: None,
+            on_selection_change: None,
             widget_key: None,
         }
     }
@@ -131,6 +140,20 @@ impl<M> List<M> {
         self
     }
 
+    pub fn selection_mode(mut self, mode: SelectionMode) -> Self {
+        self.selection_mode = mode;
+        self
+    }
+
+    pub fn multi_select(mut self, multi_select: bool) -> Self {
+        self.selection_mode = if multi_select {
+            SelectionMode::Multiple
+        } else {
+            SelectionMode::Single
+        };
+        self
+    }
+
     pub fn style(mut self, style: Style) -> Self {
         self.custom_style = Some(style);
         self
@@ -154,6 +177,14 @@ impl<M> List<M> {
         F: Fn(String) -> M + 'static,
     {
         self.on_submit = Some(Box::new(handler));
+        self
+    }
+
+    pub fn on_selection_change<F>(mut self, handler: F) -> Self
+    where
+        F: Fn(Vec<String>) -> M + 'static,
+    {
+        self.on_selection_change = Some(Box::new(handler));
         self
     }
 
@@ -181,8 +212,7 @@ impl<M> List<M> {
     }
 
     fn active_index_from_state(&self, state: &ListState) -> Option<usize> {
-        state
-            .active_item
+        active_item_id(state)
             .as_deref()
             .and_then(|id| self.index_for_id(id))
             .or_else(|| self.first_enabled_index())
@@ -250,6 +280,7 @@ impl<M: 'static> Widget<M> for List<M> {
         } else {
             theme.styles.list_active
         };
+        let selected_style = theme.styles.selected.to_render_style();
         let row_style = self
             .custom_style
             .as_ref()
@@ -298,10 +329,13 @@ impl<M: 'static> Widget<M> for List<M> {
 
             let item = &self.items[item_index];
             let is_active = item_index == active_index;
+            let is_selected = state.selection.is_selected(&item.id);
             let style = if item.disabled {
                 disabled_row_style
             } else if is_active {
                 active_row_style
+            } else if is_selected {
+                selected_style
             } else {
                 row_style
             };
@@ -309,7 +343,15 @@ impl<M: 'static> Widget<M> for List<M> {
             let y = content_y + row as u16;
             let _ = chunk.fill(content_x, y, content_width, 1, ' ', style);
 
-            let prefix = if is_active { "> " } else { "  " };
+            let prefix = if is_active && is_selected {
+                ">* "
+            } else if is_active {
+                ">  "
+            } else if is_selected {
+                " * "
+            } else {
+                "   "
+            };
             let available_width = content_width.saturating_sub(prefix.width() as u16) as usize;
             let text = Self::truncate_to_width(&item.label, available_width);
             let line = format!("{prefix}{text}");
@@ -383,6 +425,9 @@ impl<M: 'static> Widget<M> for List<M> {
                 }
                 KeyCode::Enter => {
                     let active_id = self.items[active_index].id.clone();
+                    if self.selection_mode == SelectionMode::Single {
+                        state.selection.replace_selection(active_id.clone());
+                    }
                     if let Some(ref handler) = self.on_submit {
                         emit_submit = Some(handler(active_id));
                     }
@@ -392,10 +437,24 @@ impl<M: 'static> Widget<M> for List<M> {
                     }
                     return;
                 }
+                KeyCode::Char(' ') if self.selection_mode.is_multiple() => {
+                    let active_id = self.items[active_index].id.clone();
+                    state.selection.toggle(&active_id);
+                    let emit_selection = self
+                        .on_selection_change
+                        .as_ref()
+                        .map(|handler| handler(state.selection.selected.clone()));
+                    ctx.set_handled();
+                    if let Some(message) = emit_selection {
+                        ctx.emit(message);
+                    }
+                    return;
+                }
                 _ => return,
             }
 
             state.active_item = Some(self.items[active_index].id.clone());
+            state.selection.set_cursor(state.active_item.clone());
             state.scroll_offset =
                 ensure_item_visible(state.scroll_offset, active_index, visible_rows);
             state.active_item.clone()
@@ -442,4 +501,12 @@ impl<M: 'static> Widget<M> for List<M> {
 /// Create a new list widget.
 pub fn list<M>() -> List<M> {
     List::new()
+}
+
+fn active_item_id(state: &ListState) -> Option<String> {
+    state
+        .selection
+        .cursor
+        .clone()
+        .or_else(|| state.active_item.clone())
 }

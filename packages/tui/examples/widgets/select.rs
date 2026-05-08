@@ -1,7 +1,7 @@
 //! Select widget with an inline option menu.
 //!
 //! Run with: `cargo run -p tui --example select`
-//! Use Enter or Space to open the menu, arrows to move, and Enter to confirm.
+//! Use Enter or Space to open the menu, type to filter, and Enter to confirm.
 
 use tui::prelude::*;
 
@@ -34,6 +34,8 @@ fn view(state: &State) -> impl Widget<Msg> {
                 .key("priority")
                 .height(8)
                 .placeholder("Pick a deployment priority")
+                .searchable(true)
+                .search_mode(SelectSearchMode::Fuzzy)
                 .options([
                     SelectOption::new("low", "Low priority"),
                     SelectOption::new("normal", "Normal priority"),
@@ -49,6 +51,7 @@ fn view(state: &State) -> impl Widget<Msg> {
                 .gap(1)
                 .child(label("Select Example").bold())
                 .child(label("Open the menu with Enter or Space."))
+                .child(label("Once open, typing filters the options inline."))
                 .child(label(
                     "Selection is stored in widget state and emitted on confirm.",
                 ))
