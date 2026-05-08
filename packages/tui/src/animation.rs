@@ -257,6 +257,54 @@ impl Timeline {
     pub fn stagger(delay: Duration, children: Vec<Timeline>) -> Self {
         Self::Stagger { delay, children }
     }
+
+    fn effective(self, motion_policy: MotionPolicy) -> Self {
+        match self {
+            Self::Single(mut transition) => {
+                transition.spec = motion_policy.effective_spec(transition.spec);
+                if let TransitionEffect::Layout(layout) = transition.effect {
+                    transition.effect = TransitionEffect::Layout(LayoutTransition {
+                        position: layout
+                            .position
+                            .map(|spec| motion_policy.effective_spec(spec)),
+                        size: layout.size.map(|spec| motion_policy.effective_spec(spec)),
+                        clip: layout.clip,
+                    });
+                }
+                Self::Single(transition)
+            }
+            Self::Sequence(children) => Self::Sequence(
+                children
+                    .into_iter()
+                    .map(|child| child.effective(motion_policy))
+                    .collect(),
+            ),
+            Self::Parallel(children) => Self::Parallel(
+                children
+                    .into_iter()
+                    .map(|child| child.effective(motion_policy))
+                    .collect(),
+            ),
+            Self::Stagger { delay, children } => Self::Stagger {
+                delay: motion_policy
+                    .effective_interval(delay)
+                    .unwrap_or(Duration::ZERO),
+                children: children
+                    .into_iter()
+                    .map(|child| child.effective(motion_policy))
+                    .collect(),
+            },
+        }
+    }
+
+    fn scheduled(&self) -> TimelineSchedule {
+        let mut transitions = Vec::new();
+        let duration = collect_timeline(self, Duration::ZERO, &mut transitions);
+        TimelineSchedule {
+            transitions,
+            duration,
+        }
+    }
 }
 
 impl From<Transition> for Timeline {
@@ -581,6 +629,26 @@ pub enum ClipMode {
     ClipToTargetBounds,
 }
 
+/// A transition that is active at a specific timeline instant.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TimelineFrame {
+    pub transition: Transition,
+    pub progress: f64,
+    pub complete: bool,
+}
+
+#[derive(Debug, Clone)]
+struct ScheduledTransition {
+    offset: Duration,
+    transition: Transition,
+}
+
+#[derive(Debug, Clone)]
+struct TimelineSchedule {
+    transitions: Vec<ScheduledTransition>,
+    duration: Option<Duration>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct AnimationKey {
     path: WidgetPath,
@@ -882,6 +950,86 @@ impl LayoutAnimation {
     }
 }
 
+#[derive(Debug, Clone)]
+struct TimelineAnimation {
+    timeline: Timeline,
+    started_at: Instant,
+    active: bool,
+}
+
+impl TimelineAnimation {
+    fn new(timeline: Timeline, now: Instant) -> Self {
+        let active = timeline
+            .scheduled()
+            .duration
+            .map(|duration| !duration.is_zero())
+            .unwrap_or(true);
+        Self {
+            timeline,
+            started_at: now,
+            active,
+        }
+    }
+
+    fn update_to(&mut self, timeline: Timeline, restart: bool, now: Instant) -> bool {
+        if restart || self.timeline != timeline {
+            *self = Self::new(timeline, now);
+            return true;
+        }
+
+        let was_active = self.active;
+        self.active = !self.is_complete(now);
+        was_active || self.active
+    }
+
+    fn frames_at(&self, now: Instant) -> Vec<TimelineFrame> {
+        let elapsed = now.saturating_duration_since(self.started_at);
+        let schedule = self.timeline.scheduled();
+        if schedule.transitions.is_empty() {
+            return Vec::new();
+        }
+
+        schedule
+            .transitions
+            .into_iter()
+            .filter_map(|scheduled| {
+                if elapsed < scheduled.offset {
+                    return None;
+                }
+
+                let local_elapsed = elapsed.saturating_sub(scheduled.offset);
+                let (progress, complete) = scheduled.transition.spec.progress_at(local_elapsed);
+                if complete && !transition_is_visible_after_completion(&scheduled.transition) {
+                    return None;
+                }
+
+                Some(TimelineFrame {
+                    transition: scheduled.transition,
+                    progress,
+                    complete,
+                })
+            })
+            .collect()
+    }
+
+    fn is_complete(&self, now: Instant) -> bool {
+        let Some(duration) = self.timeline.scheduled().duration else {
+            return false;
+        };
+
+        now.saturating_duration_since(self.started_at) >= duration
+    }
+
+    fn advance(&mut self, now: Instant) -> bool {
+        if !self.active {
+            return false;
+        }
+
+        self.active = !self.is_complete(now);
+        true
+    }
+}
+
 impl PulseAnimation {
     fn new(now: Instant) -> Self {
         Self {
@@ -913,6 +1061,7 @@ pub struct AnimationStore {
     pulses: HashMap<AnimationKey, PulseAnimation>,
     styles: HashMap<AnimationKey, StyleAnimation>,
     layouts: HashMap<AnimationKey, LayoutAnimation>,
+    timelines: HashMap<AnimationKey, TimelineAnimation>,
 }
 
 impl AnimationStore {
@@ -936,6 +1085,19 @@ impl AnimationStore {
     pub fn style(&self, path: &WidgetPath, channel: &str) -> Option<Style> {
         let key = AnimationKey::new(path, channel);
         self.styles.get(&key).map(|state| state.displayed)
+    }
+
+    pub(crate) fn timeline_frames(
+        &self,
+        path: &WidgetPath,
+        channel: &str,
+        now: Instant,
+    ) -> Vec<TimelineFrame> {
+        let key = AnimationKey::new(path, channel);
+        self.timelines
+            .get(&key)
+            .map(|state| state.frames_at(now))
+            .unwrap_or_default()
     }
 
     fn track_value(
@@ -983,12 +1145,32 @@ impl AnimationStore {
             .update_to(target, spec, now)
     }
 
+    pub(crate) fn track_timeline(
+        &mut self,
+        path: &WidgetPath,
+        channel: &str,
+        timeline: Timeline,
+        restart: bool,
+        now: Instant,
+        motion_policy: MotionPolicy,
+    ) -> (Vec<TimelineFrame>, bool) {
+        let timeline = timeline.effective(motion_policy);
+        let key = AnimationKey::new(path, channel);
+        let state = self
+            .timelines
+            .entry(key)
+            .or_insert_with(|| TimelineAnimation::new(timeline.clone(), now));
+        let changed = state.update_to(timeline, restart, now);
+        (state.frames_at(now), changed || state.active)
+    }
+
     fn remove_channel(&mut self, path: &WidgetPath, channel: &str) {
         let key = AnimationKey::new(path, channel);
         self.values.remove(&key);
         self.pulses.remove(&key);
         self.styles.remove(&key);
         self.layouts.remove(&key);
+        self.timelines.remove(&key);
     }
 
     pub fn track_layout(
@@ -1047,6 +1229,10 @@ impl AnimationStore {
             active |= style.advance(now);
         }
 
+        for timeline in self.timelines.values_mut() {
+            active |= timeline.advance(now);
+        }
+
         active
     }
 
@@ -1054,6 +1240,7 @@ impl AnimationStore {
         self.values.values().any(|value| value.active)
             || self.layouts.values().any(|layout| layout.active)
             || self.styles.values().any(|style| style.active)
+            || self.timelines.values().any(|timeline| timeline.active)
             || !self.pulses.is_empty()
     }
 
@@ -1066,6 +1253,7 @@ impl AnimationStore {
         self.pulses.retain(|key, _| is_active(&key.path));
         self.styles.retain(|key, _| is_active(&key.path));
         self.layouts.retain(|key, _| is_active(&key.path));
+        self.timelines.retain(|key, _| is_active(&key.path));
     }
 }
 
@@ -1179,6 +1367,73 @@ fn scale_duration(duration: Duration, factor: f64) -> Duration {
 
 fn lerp(start: f64, end: f64, t: f64) -> f64 {
     start + (end - start) * t
+}
+
+fn transition_is_visible_after_completion(_transition: &Transition) -> bool {
+    true
+}
+
+fn collect_timeline(
+    timeline: &Timeline,
+    base_offset: Duration,
+    transitions: &mut Vec<ScheduledTransition>,
+) -> Option<Duration> {
+    match timeline {
+        Timeline::Single(transition) => {
+            transitions.push(ScheduledTransition {
+                offset: base_offset,
+                transition: transition.clone(),
+            });
+            transition_total_duration(transition).map(|duration| base_offset + duration)
+        }
+        Timeline::Sequence(children) => {
+            let mut cursor = base_offset;
+            for child in children {
+                let child_end = collect_timeline(child, cursor, transitions)?;
+                cursor = child_end;
+            }
+            Some(cursor)
+        }
+        Timeline::Parallel(children) => {
+            let mut end = Some(base_offset);
+            for child in children {
+                let child_end = collect_timeline(child, base_offset, transitions);
+                end = max_optional_duration(end, child_end);
+            }
+            end
+        }
+        Timeline::Stagger { delay, children } => {
+            let mut end = Some(base_offset);
+            for (index, child) in children.iter().enumerate() {
+                let offset =
+                    base_offset + delay.saturating_mul(index.min(u32::MAX as usize) as u32);
+                let child_end = collect_timeline(child, offset, transitions);
+                end = max_optional_duration(end, child_end);
+            }
+            end
+        }
+    }
+}
+
+fn transition_total_duration(transition: &Transition) -> Option<Duration> {
+    if matches!(transition.spec.repeat, Repeat::Forever) {
+        return None;
+    }
+
+    let repeat_count = match transition.spec.repeat {
+        Repeat::Never => 1,
+        Repeat::Count(count) => count.max(1) as u32,
+        Repeat::Forever => unreachable!(),
+    };
+
+    Some(transition.spec.delay + transition.spec.duration.saturating_mul(repeat_count))
+}
+
+fn max_optional_duration(a: Option<Duration>, b: Option<Duration>) -> Option<Duration> {
+    match (a, b) {
+        (Some(a), Some(b)) => Some(a.max(b)),
+        _ => None,
+    }
 }
 
 fn cubic_bezier_y_for_x(x: f64, x1: f64, y1: f64, x2: f64, y2: f64) -> f64 {
@@ -1438,5 +1693,80 @@ mod tests {
             store.style(&path, "style").unwrap().fg_color,
             Some(crate::style::Color::Rgb(50, 0, 0))
         );
+    }
+
+    #[test]
+    fn timeline_sequence_activates_transitions_in_order() {
+        let mut store = AnimationStore::new();
+        let path = path();
+        let start = Instant::now();
+        let spec = AnimationSpec::new(Duration::from_millis(100), Easing::Linear);
+        let timeline = Timeline::sequence(vec![
+            Timeline::single(Transition::new(TransitionEffect::Expand, spec)),
+            Timeline::single(Transition::new(TransitionEffect::ScaleFromCenter, spec)),
+        ]);
+
+        let (_, active) = store.track_timeline(
+            &path,
+            "enter",
+            timeline.clone(),
+            false,
+            start,
+            MotionPolicy::default(),
+        );
+        assert!(active);
+        let frames = store.timeline_frames(&path, "enter", start + Duration::from_millis(50));
+        assert_eq!(frames.len(), 1);
+        assert_eq!(frames[0].transition.effect, TransitionEffect::Expand);
+        assert!((frames[0].progress - 0.5).abs() < 0.001);
+
+        assert!(store.advance(start + Duration::from_millis(150)));
+        let frames = store.timeline_frames(&path, "enter", start + Duration::from_millis(150));
+        assert_eq!(frames.len(), 2);
+        assert_eq!(frames[0].transition.effect, TransitionEffect::Expand);
+        assert!(frames[0].complete);
+        assert_eq!(
+            frames[1].transition.effect,
+            TransitionEffect::ScaleFromCenter
+        );
+        assert!((frames[1].progress - 0.5).abs() < 0.001);
+
+        assert!(
+            store
+                .track_timeline(
+                    &path,
+                    "enter",
+                    timeline,
+                    false,
+                    start + Duration::from_millis(220),
+                    MotionPolicy::default(),
+                )
+                .1
+        );
+        assert!(!store.has_active_animations());
+    }
+
+    #[test]
+    fn timeline_stagger_offsets_children() {
+        let mut store = AnimationStore::new();
+        let path = path();
+        let start = Instant::now();
+        let spec = AnimationSpec::new(Duration::from_millis(100), Easing::Linear);
+        let child = || Timeline::single(Transition::new(TransitionEffect::Expand, spec));
+        let timeline = Timeline::stagger(Duration::from_millis(25), vec![child(), child()]);
+
+        store.track_timeline(
+            &path,
+            "items",
+            timeline,
+            false,
+            start,
+            MotionPolicy::default(),
+        );
+
+        let frames = store.timeline_frames(&path, "items", start + Duration::from_millis(50));
+        assert_eq!(frames.len(), 2);
+        assert!((frames[0].progress - 0.5).abs() < 0.001);
+        assert!((frames[1].progress - 0.25).abs() < 0.001);
     }
 }

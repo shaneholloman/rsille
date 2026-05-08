@@ -8,7 +8,8 @@ use render::chunk::Chunk;
 use smallvec::SmallVec;
 
 use crate::animation::{
-    AnimationCtx, AnimationStore, LayoutSnapshot, LayoutTransition, MotionPolicy,
+    AnimationCtx, AnimationStore, LayoutSnapshot, LayoutTransition, MotionPolicy, Timeline,
+    TimelineFrame,
 };
 use crate::event::Event;
 use crate::focus::FocusConfig;
@@ -271,6 +272,26 @@ impl AnimationStoreView<'_> {
             Self::Mutable(store) => store.borrow().layout_snapshot(path, channel),
         }
     }
+
+    fn track_timeline(
+        self,
+        path: &WidgetPath,
+        channel: &str,
+        timeline: Timeline,
+        restart: bool,
+        now: std::time::Instant,
+        motion_policy: MotionPolicy,
+    ) -> Vec<TimelineFrame> {
+        match self {
+            Self::ReadOnly(store) => store.timeline_frames(path, channel, now),
+            Self::Mutable(store) => {
+                store
+                    .borrow_mut()
+                    .track_timeline(path, channel, timeline, restart, now, motion_policy)
+                    .0
+            }
+        }
+    }
 }
 
 pub struct RenderCtx<'a> {
@@ -395,6 +416,23 @@ impl<'a> RenderCtx<'a> {
             self.motion_policy,
         );
         displayed
+    }
+
+    /// Track a timeline and return transition frames active at the current render instant.
+    pub fn track_timeline(
+        &self,
+        channel: &str,
+        timeline: Timeline,
+        restart: bool,
+    ) -> Vec<TimelineFrame> {
+        self.animation_store.track_timeline(
+            &self.current_path,
+            channel,
+            timeline,
+            restart,
+            self.now,
+            self.motion_policy,
+        )
     }
 
     /// Read persistent state, or return a default reference if absent.

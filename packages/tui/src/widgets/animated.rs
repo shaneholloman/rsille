@@ -2,7 +2,10 @@
 
 use render::area::Area;
 
-use crate::animation::{AnimationSpec, ClipMode, LayoutTransition, Presence, Transition};
+use crate::animation::{
+    AnimationSpec, ClipMode, InitialAnimation, LayoutTransition, Presence, Timeline, TimelineFrame,
+    TransitionEffect,
+};
 use crate::focus::FocusConfig;
 use crate::layout::Constraints;
 use crate::widget::{IntoWidget, RenderCtx, Widget, WidgetKey};
@@ -58,13 +61,14 @@ impl<M> Animated<M> {
         self
     }
 
-    pub fn enter(mut self, transition: Transition) -> Self {
-        self.presence = self.presence.enter(transition);
+    pub fn enter(mut self, timeline: impl Into<Timeline>) -> Self {
+        self.presence = self.presence.enter(timeline);
+        self.presence.initial = InitialAnimation::Play;
         self
     }
 
-    pub fn exit(mut self, transition: Transition) -> Self {
-        self.presence = self.presence.exit(transition);
+    pub fn exit(mut self, timeline: impl Into<Timeline>) -> Self {
+        self.presence = self.presence.exit(timeline);
         self
     }
 
@@ -91,6 +95,40 @@ impl<M> Animated<M> {
             self.render_child(&mut child_chunk, ctx);
         }
     }
+
+    fn render_area_with_clip(
+        &self,
+        chunk: &mut render::chunk::Chunk,
+        ctx: &RenderCtx,
+        area: Area,
+        clip: ClipMode,
+        target: Area,
+    ) {
+        match clip {
+            ClipMode::None => self.render_with_area(chunk, ctx, area),
+            ClipMode::ClipToAnimatedBounds => {
+                let _ = chunk.with_clip(area, |child_chunk| self.render_child(child_chunk, ctx));
+            }
+            ClipMode::ClipToTargetBounds => {
+                if let Some(clipped) = area.clamp_to(&target) {
+                    let _ =
+                        chunk.with_clip(clipped, |child_chunk| self.render_child(child_chunk, ctx));
+                }
+            }
+        }
+    }
+
+    fn enter_frames(&self, ctx: &RenderCtx) -> Vec<TimelineFrame> {
+        let Some(timeline) = self.presence.enter.clone() else {
+            return Vec::new();
+        };
+
+        if self.presence.initial == InitialAnimation::Skip {
+            return Vec::new();
+        }
+
+        ctx.track_timeline("enter", timeline, false)
+    }
 }
 
 impl<M> Widget<M> for Animated<M> {
@@ -102,25 +140,20 @@ impl<M> Widget<M> for Animated<M> {
 
         ctx.record_bounds(target);
 
-        let Some(transition) = self.layout_transition else {
-            self.render_child(chunk, ctx);
-            return;
+        let (mut display_area, clip) = if let Some(transition) = self.layout_transition {
+            (
+                ctx.track_layout("layout", target, transition),
+                transition.clip,
+            )
+        } else {
+            (target, ClipMode::None)
         };
 
-        let displayed = ctx.track_layout("layout", target, transition);
-        match transition.clip {
-            ClipMode::None => self.render_with_area(chunk, ctx, displayed),
-            ClipMode::ClipToAnimatedBounds => {
-                let _ =
-                    chunk.with_clip(displayed, |child_chunk| self.render_child(child_chunk, ctx));
-            }
-            ClipMode::ClipToTargetBounds => {
-                if let Some(clipped) = displayed.clamp_to(&target) {
-                    let _ =
-                        chunk.with_clip(clipped, |child_chunk| self.render_child(child_chunk, ctx));
-                }
-            }
+        for frame in self.enter_frames(ctx) {
+            display_area = apply_enter_effect(display_area, &frame);
         }
+
+        self.render_area_with_clip(chunk, ctx, display_area, clip, target);
     }
 
     fn constraints(&self) -> Constraints {
@@ -138,4 +171,31 @@ impl<M> Widget<M> for Animated<M> {
     fn key(&self) -> Option<&str> {
         self.widget_key.as_deref()
     }
+}
+
+fn apply_enter_effect(area: Area, frame: &TimelineFrame) -> Area {
+    match frame.transition.effect {
+        TransitionEffect::Collapse | TransitionEffect::Expand => {
+            vertical_reveal(area, frame.progress)
+        }
+        TransitionEffect::ScaleFromCenter => scale_from_center(area, frame.progress),
+        TransitionEffect::Layout(_) | TransitionEffect::Fade | TransitionEffect::BorderEmphasis => {
+            area
+        }
+    }
+}
+
+fn vertical_reveal(area: Area, progress: f64) -> Area {
+    let height = ((area.height() as f64) * progress.clamp(0.0, 1.0)).round() as u16;
+    Area::new(area.pos(), (area.width(), height).into())
+}
+
+fn scale_from_center(area: Area, progress: f64) -> Area {
+    let progress = progress.clamp(0.0, 1.0);
+    let width = ((area.width() as f64) * progress).round() as u16;
+    let height = ((area.height() as f64) * progress).round() as u16;
+    let x = area.x() + area.width().saturating_sub(width) / 2;
+    let y = area.y() + area.height().saturating_sub(height) / 2;
+
+    Area::new((x, y).into(), (width, height).into())
 }
