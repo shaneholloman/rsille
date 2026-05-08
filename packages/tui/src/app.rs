@@ -21,7 +21,8 @@ use crate::focus::FocusManager;
 use crate::shell::{CommandRouter, Hotkey, HotkeyRegistry};
 use crate::style::Theme;
 use crate::widget::{
-    EventCtx, EventPhase, FocusRequest, RenderCtx, Widget, WidgetKey, WidgetPath, WidgetStore,
+    EventCtx, EventPhase, FocusRequest, HitRegion, RenderCtx, Widget, WidgetKey, WidgetPath,
+    WidgetStore,
 };
 use crate::widgets::text_input::TextInputState;
 use crate::widgets::textarea::TextAreaState;
@@ -368,6 +369,7 @@ impl<State, M: Clone + std::fmt::Debug + Send + 'static> App<State, M> {
             store: WidgetStore::new(),
             animation_store: RefCell::new(AnimationStore::new()),
             geometry: RefCell::new(HashMap::new()),
+            hit_regions: RefCell::new(Vec::new()),
             focus: FocusManager::new(),
             cached_tree: None,
             presence_previous_tree: None,
@@ -461,6 +463,7 @@ struct AppRuntime<State, U, V, M> {
     store: WidgetStore,
     animation_store: RefCell<AnimationStore>,
     geometry: RefCell<HashMap<WidgetPath, render::area::Area>>,
+    hit_regions: RefCell<Vec<HitRegion>>,
     focus: FocusManager,
     cached_tree: Option<Box<dyn Widget<M>>>,
     presence_previous_tree: Option<Box<dyn Widget<M>>>,
@@ -529,6 +532,21 @@ fn scale_area_for_exit(area: render::area::Area, progress: f64) -> render::area:
     let y = area.y() + area.height().saturating_sub(height) / 2;
 
     render::area::Area::new((x, y).into(), (width, height).into())
+}
+
+fn mouse_position(event: &Event) -> Option<(u16, u16)> {
+    match event {
+        Event::Mouse(mouse) => Some((mouse.column, mouse.row)),
+        _ => None,
+    }
+}
+
+fn hit_test_path(hit_regions: &[HitRegion], x: u16, y: u16) -> Option<WidgetPath> {
+    hit_regions
+        .iter()
+        .rev()
+        .find(|region| region.contains(x, y))
+        .map(|region| region.path.clone())
 }
 
 impl<State, U, V, M: Send + 'static> AppRuntime<State, U, V, M> {
@@ -761,8 +779,13 @@ impl<State, U, V, M: Send + 'static> AppRuntime<State, U, V, M> {
         messages: &mut Vec<M>,
         focus: &mut FocusManager,
         geometry: &HashMap<WidgetPath, render::area::Area>,
+        hit_regions: &[HitRegion],
     ) -> bool {
-        let route = Self::build_event_route(tree, focus.current_path());
+        let target_path = match mouse_position(event) {
+            Some((x, y)) => hit_test_path(hit_regions, x, y),
+            None => focus.current_path().cloned(),
+        };
+        let route = Self::build_event_route(tree, target_path.as_ref());
         let mut handled = false;
         let focused_snapshot = focus.current_path().cloned();
         let ancestor_len = route.len().saturating_sub(1);
@@ -1267,12 +1290,14 @@ where
         // Render
         let focused_path = self.focus.current_path();
         self.geometry.borrow_mut().clear();
+        self.hit_regions.borrow_mut().clear();
         let ctx = RenderCtx::with_runtime(
             &self.store,
             &self.animation_store,
             &self.theme,
             focused_path,
             &self.geometry,
+            &self.hit_regions,
             render_now,
             self.motion_policy,
         );
@@ -1306,6 +1331,7 @@ where
 
         let tree = self.cached_tree.as_ref().unwrap();
         let geometry = self.geometry.borrow();
+        let hit_regions = self.hit_regions.borrow();
 
         for event in events {
             if let Event::Resize(_, _) = event {
@@ -1319,6 +1345,7 @@ where
                 &mut self.messages,
                 &mut self.focus,
                 &geometry,
+                &hit_regions,
             ) {
                 continue;
             }
@@ -1497,5 +1524,25 @@ mod tests {
         assert_eq!(display.y(), 5);
         assert_eq!(display.width(), 5);
         assert_eq!(display.height(), 3);
+    }
+
+    #[test]
+    fn hit_test_uses_latest_rendered_region_on_overlap() {
+        let lower = WidgetPath::root().child("lower");
+        let upper = WidgetPath::root().child("upper");
+        let regions = vec![
+            HitRegion {
+                path: lower.clone(),
+                area: render::area::Area::new((0, 0).into(), (10, 5).into()),
+            },
+            HitRegion {
+                path: upper.clone(),
+                area: render::area::Area::new((2, 1).into(), (10, 5).into()),
+            },
+        ];
+
+        assert_eq!(hit_test_path(&regions, 3, 2), Some(upper));
+        assert_eq!(hit_test_path(&regions, 1, 1), Some(lower));
+        assert_eq!(hit_test_path(&regions, 20, 20), None);
     }
 }

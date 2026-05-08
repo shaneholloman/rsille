@@ -8,8 +8,8 @@ use render::chunk::Chunk;
 use smallvec::SmallVec;
 
 use crate::animation::{
-    AnimationCtx, AnimationStore, ClipMode, LayoutSnapshot, LayoutTransition, MotionPolicy,
-    Presence, SharedTransition, Timeline, TimelineFrame,
+    AnimationCtx, AnimationStore, ClipMode, HitTestMode, LayoutSnapshot, LayoutTransition,
+    MotionPolicy, Presence, SharedTransition, Timeline, TimelineFrame,
 };
 use crate::event::Event;
 use crate::focus::FocusConfig;
@@ -198,6 +198,11 @@ pub trait Widget<M> {
         None
     }
 
+    /// Pointer hit-testing strategy for animated geometry.
+    fn hit_test_mode(&self) -> HitTestMode {
+        HitTestMode::Target
+    }
+
     /// Return size constraints for layout computation.
     fn constraints(&self) -> Constraints;
 
@@ -245,6 +250,10 @@ impl<M> Widget<M> for Box<dyn Widget<M>> {
 
     fn shared_transition(&self) -> Option<&SharedTransition> {
         (**self).shared_transition()
+    }
+
+    fn hit_test_mode(&self) -> HitTestMode {
+        (**self).hit_test_mode()
     }
 
     fn constraints(&self) -> Constraints {
@@ -328,6 +337,29 @@ impl AnimationStoreView<'_> {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct HitRegion {
+    pub path: WidgetPath,
+    pub area: Area,
+}
+
+impl HitRegion {
+    fn new(path: WidgetPath, area: Area) -> Option<Self> {
+        if area.width() == 0 || area.height() == 0 {
+            return None;
+        }
+
+        Some(Self { path, area })
+    }
+
+    pub(crate) fn contains(&self, x: u16, y: u16) -> bool {
+        x >= self.area.x()
+            && x < self.area.x().saturating_add(self.area.width())
+            && y >= self.area.y()
+            && y < self.area.y().saturating_add(self.area.height())
+    }
+}
+
 pub struct RenderCtx<'a> {
     store: &'a WidgetStore,
     animation_store: AnimationStoreView<'a>,
@@ -335,6 +367,8 @@ pub struct RenderCtx<'a> {
     focused_path: Option<&'a WidgetPath>,
     current_path: WidgetPath,
     geometry: &'a RefCell<HashMap<WidgetPath, Area>>,
+    hit_regions: Option<&'a RefCell<Vec<HitRegion>>>,
+    hit_clip: Option<Area>,
     now: std::time::Instant,
     motion_policy: MotionPolicy,
     layout_target: Option<Area>,
@@ -356,6 +390,8 @@ impl<'a> RenderCtx<'a> {
             focused_path,
             current_path: WidgetPath::root(),
             geometry,
+            hit_regions: None,
+            hit_clip: None,
             now: std::time::Instant::now(),
             motion_policy: MotionPolicy::default(),
             layout_target: None,
@@ -369,6 +405,7 @@ impl<'a> RenderCtx<'a> {
         theme: &'a Theme,
         focused_path: Option<&'a WidgetPath>,
         geometry: &'a RefCell<HashMap<WidgetPath, Area>>,
+        hit_regions: &'a RefCell<Vec<HitRegion>>,
         now: std::time::Instant,
         motion_policy: MotionPolicy,
     ) -> Self {
@@ -379,6 +416,8 @@ impl<'a> RenderCtx<'a> {
             focused_path,
             current_path: WidgetPath::root(),
             geometry,
+            hit_regions: Some(hit_regions),
+            hit_clip: None,
             now,
             motion_policy,
             layout_target: None,
@@ -543,6 +582,8 @@ impl<'a> RenderCtx<'a> {
             focused_path: self.focused_path,
             current_path: self.current_path.child(key),
             geometry: self.geometry,
+            hit_regions: self.hit_regions,
+            hit_clip: self.hit_clip,
             now: self.now,
             motion_policy: self.motion_policy,
             layout_target: None,
@@ -562,6 +603,8 @@ impl<'a> RenderCtx<'a> {
             focused_path: self.focused_path,
             current_path: self.current_path.child(key),
             geometry: self.geometry,
+            hit_regions: self.hit_regions,
+            hit_clip: self.hit_clip,
             now: self.now,
             motion_policy: self.motion_policy,
             layout_target: Some(target),
@@ -605,9 +648,12 @@ impl<'a> RenderCtx<'a> {
                         .0
                 }
             };
+            let hit_area = hit_area_for(shared.layout.hit_test, target, display);
+            self.record_child_hit_area(&path, hit_area);
             return (
                 display,
-                self.child_ctx_with_layout(key, target),
+                self.child_ctx_with_layout(key, target)
+                    .with_hit_area(hit_area),
                 shared.layout.clip,
             );
         }
@@ -629,14 +675,23 @@ impl<'a> RenderCtx<'a> {
                         .0
                 }
             };
+            let hit_area = hit_area_for(transition.hit_test, target, display);
+            self.record_child_hit_area(&path, hit_area);
             return (
                 display,
-                self.child_ctx_with_layout(key, target),
+                self.child_ctx_with_layout(key, target)
+                    .with_hit_area(hit_area),
                 transition.clip,
             );
         }
 
-        (target, self.child_ctx(key), ClipMode::None)
+        let hit_area = hit_area_for(child.hit_test_mode(), target, target);
+        self.record_child_hit_area(&path, hit_area);
+        (
+            target,
+            self.child_ctx(key).with_hit_area(hit_area),
+            ClipMode::None,
+        )
     }
 
     pub(crate) fn render_child_at<M>(
@@ -677,6 +732,69 @@ impl<'a> RenderCtx<'a> {
             .borrow_mut()
             .insert(self.current_path.clone(), area);
     }
+
+    /// Record explicit pointer hit-test bounds for the current widget.
+    pub fn record_hit_bounds(&self, target: Area, display: Area, mode: HitTestMode) {
+        self.record_child_hit_area(&self.current_path, hit_area_for(mode, target, display));
+    }
+
+    pub(crate) fn with_hit_area(mut self, area: Option<Area>) -> Self {
+        self.hit_clip = Some(
+            area.and_then(|area| self.constrain_hit_area(area))
+                .unwrap_or_else(zero_area),
+        );
+        self
+    }
+
+    fn record_child_hit_area(&self, path: &WidgetPath, area: Option<Area>) {
+        let Some(regions) = self.hit_regions else {
+            return;
+        };
+
+        let area = area.and_then(|area| self.constrain_hit_area(area));
+
+        if let Some(region) = area.and_then(|area| HitRegion::new(path.clone(), area)) {
+            regions.borrow_mut().push(region);
+        }
+    }
+
+    fn constrain_hit_area(&self, area: Area) -> Option<Area> {
+        match self.hit_clip {
+            Some(clip) => area.clamp_to(&clip),
+            None => Some(area),
+        }
+    }
+}
+
+pub(crate) fn hit_area_for(mode: HitTestMode, target: Area, display: Area) -> Option<Area> {
+    match mode {
+        HitTestMode::Target => Some(target),
+        HitTestMode::Display => Some(display),
+        HitTestMode::TargetAndDisplay => Some(union_area(target, display)),
+        HitTestMode::None => None,
+    }
+}
+
+fn union_area(a: Area, b: Area) -> Area {
+    let left = a.x().min(b.x());
+    let top = a.y().min(b.y());
+    let right = a
+        .x()
+        .saturating_add(a.width())
+        .max(b.x().saturating_add(b.width()));
+    let bottom = a
+        .y()
+        .saturating_add(a.height())
+        .max(b.y().saturating_add(b.height()));
+
+    Area::new(
+        (left, top).into(),
+        (right.saturating_sub(left), bottom.saturating_sub(top)).into(),
+    )
+}
+
+fn zero_area() -> Area {
+    Area::new((0, 0).into(), (0, 0).into())
 }
 
 // ---------------------------------------------------------------------------

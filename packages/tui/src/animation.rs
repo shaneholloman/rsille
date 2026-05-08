@@ -269,6 +269,7 @@ impl Timeline {
                             .map(|spec| motion_policy.effective_spec(spec)),
                         size: layout.size.map(|spec| motion_policy.effective_spec(spec)),
                         clip: layout.clip,
+                        hit_test: layout.hit_test,
                     });
                 }
                 Self::Single(transition)
@@ -579,6 +580,7 @@ pub struct LayoutTransition {
     pub position: Option<AnimationSpec>,
     pub size: Option<AnimationSpec>,
     pub clip: ClipMode,
+    pub hit_test: HitTestMode,
 }
 
 impl LayoutTransition {
@@ -587,6 +589,7 @@ impl LayoutTransition {
             position: None,
             size: None,
             clip: ClipMode::None,
+            hit_test: HitTestMode::Target,
         }
     }
 
@@ -595,6 +598,7 @@ impl LayoutTransition {
             position: Some(spec),
             size: None,
             clip: ClipMode::None,
+            hit_test: HitTestMode::Target,
         }
     }
 
@@ -603,6 +607,7 @@ impl LayoutTransition {
             position: None,
             size: Some(spec),
             clip: ClipMode::ClipToAnimatedBounds,
+            hit_test: HitTestMode::Target,
         }
     }
 
@@ -611,7 +616,13 @@ impl LayoutTransition {
             position: Some(spec),
             size: Some(spec),
             clip: ClipMode::ClipToAnimatedBounds,
+            hit_test: HitTestMode::Target,
         }
+    }
+
+    pub fn hit_test(mut self, mode: HitTestMode) -> Self {
+        self.hit_test = mode;
+        self
     }
 }
 
@@ -627,6 +638,25 @@ pub enum ClipMode {
     None,
     ClipToAnimatedBounds,
     ClipToTargetBounds,
+}
+
+/// Which geometry should receive pointer events while layout animation is active.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HitTestMode {
+    /// Use the logical layout target. This preserves pre-animation event behavior.
+    Target,
+    /// Use the animated displayed area.
+    Display,
+    /// Use the bounding union of the logical target and animated displayed area.
+    TargetAndDisplay,
+    /// Exclude this widget from pointer hit testing.
+    None,
+}
+
+impl Default for HitTestMode {
+    fn default() -> Self {
+        Self::Target
+    }
 }
 
 /// A shared area transition joins layout animation state across widget paths.
@@ -1257,6 +1287,7 @@ impl AnimationStore {
                 .size
                 .map(|spec| motion_policy.effective_spec(spec)),
             clip: transition.clip,
+            hit_test: transition.hit_test,
         };
         let key = AnimationKey::new(path, channel);
         let state = self
@@ -1284,6 +1315,7 @@ impl AnimationStore {
                 .size
                 .map(|spec| motion_policy.effective_spec(spec)),
             clip: transition.clip,
+            hit_test: transition.hit_test,
         };
         let state = self
             .shared_layouts
@@ -1815,6 +1847,29 @@ mod tests {
         let snapshot = store.shared_layout_snapshot("selection").unwrap();
         assert_eq!(snapshot.displayed.to_area().x(), 10);
         assert_eq!(snapshot.displayed.to_area().width(), 20);
+    }
+
+    #[test]
+    fn layout_transition_preserves_hit_test_mode_through_policy() {
+        let mut store = AnimationStore::new();
+        let path = path();
+        let start = Instant::now();
+        let transition = LayoutTransition::size_and_position(AnimationSpec::default())
+            .hit_test(HitTestMode::Display);
+        let target = Area::new((0, 0).into(), (10, 2).into());
+
+        store.track_layout(
+            &path,
+            "layout",
+            target,
+            transition,
+            start,
+            MotionPolicy::reduced_motion(),
+        );
+
+        let snapshot = store.layout_snapshot(&path, "layout").unwrap();
+        assert_eq!(snapshot.target, target);
+        assert_eq!(transition.hit_test, HitTestMode::Display);
     }
 
     #[test]

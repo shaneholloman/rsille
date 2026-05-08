@@ -2,8 +2,9 @@
 
 pub use crate::animation::{
     AnimationConfig, AnimationSlot, AnimationSpec, AnimationTheme, AreaF, ClipMode,
-    Direction as AnimationDirection, Easing, InitialAnimation, LayoutSnapshot, LayoutTransition,
-    MotionPolicy, Presence, Repeat, SharedTransition, Timeline, Transition, TransitionEffect,
+    Direction as AnimationDirection, Easing, HitTestMode, InitialAnimation, LayoutSnapshot,
+    LayoutTransition, MotionPolicy, Presence, Repeat, SharedTransition, Timeline, Transition,
+    TransitionEffect,
 };
 pub use crate::app::{App, FrameInfo, QuitBehavior};
 pub use crate::effect::{
