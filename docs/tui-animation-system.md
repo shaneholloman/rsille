@@ -16,6 +16,34 @@
 
 动画系统应是框架能力，而不是每个业务应用重复维护的 `on_frame` 状态机。
 
+## 当前实现状态
+
+截至本次实现，`packages/tui` 已完成动画系统的核心运行时和公开 API 骨架：
+
+- [x] `AnimationSpec`：支持 `duration`、`delay`、`easing`、`repeat`、`direction`。
+- [x] `Easing`：支持 `Linear`、`EaseIn`、`EaseOut`、`EaseInOut`、`CubicBezier`、`Steps`。
+- [x] 全局 `MotionPolicy`：支持禁用动画、reduced motion、速度缩放、deterministic frame step。
+- [x] `AnimationTheme` / `AnimationSlot`：支持主题级动画默认值。
+- [x] `AnimationStore` value track：按 `WidgetPath + channel` 存储数值过渡。
+- [x] `AnimationStore` pulse track：支持 loading spinner 这类持续视觉计数器。
+- [x] `AnimationStore` style track：支持 `Style` 颜色和文本 attribute 过渡。
+- [x] `AnimationStore` layout track：支持 `AreaF`、`LayoutSnapshot`、target/displayed area 过渡。
+- [x] runtime scheduler：`AppRuntime` 会在存在 active animation 时继续请求下一帧。
+- [x] widget hook：`Widget::animate(&mut AnimationCtx)` 已接入 widget tree 遍历。
+- [x] render context：`RenderCtx` 可读取 `animation_value`、`animation_style`、`layout_animation`，并可通过 `track_layout` 在 render 阶段登记布局动画 target。
+- [x] 组件级动画：`ProgressBar`、`LoadingIndicator`、`Switch`、`Button` 已使用统一 store。
+- [x] 通用 wrapper：新增 `animate(child)` / `Animated`，支持 `.layout(...)`、`.layout_transition(...)`、`.enter(...)`、`.exit(...)`、`.presence(...)`。
+- [x] Transition / Timeline / Presence API：已提供 `Transition`、`TransitionEffect`、`Timeline`、`Presence`、`InitialAnimation` 类型并导出到 prelude。
+- [x] 状态清理：当前 live widget tree 消失的路径会从 animation store 中清理。
+- [x] 测试覆盖：已覆盖 value retarget、delay、disabled motion、pulse 清理、layout retarget、style interpolation 等核心行为。
+
+仍然预留、尚未完整运行时化的部分：
+
+- [ ] 完整 exit presence runtime：widget 从 view tree 消失后，旧 visual node 的保留、渲染和最终 prune 还未落地。
+- [ ] timeline executor：`Sequence`、`Parallel`、`Stagger` 的类型已提供，但尚未接入统一调度执行器。
+- [ ] 全局 layout diff pipeline：当前 layout transition 通过 wrapper/render 阶段 target area 驱动，尚未实现文档中完整的 layout 前后 tree snapshot diff。
+- [ ] shared transition：跨 widget path 的 shared element/area transition 仍为后续扩展。
+
 ## 设计目标
 
 1. 语义 state 和视觉 state 分离。

@@ -16,7 +16,7 @@ pub use theme::{Theme, ThemeBuilder, ThemeStyles};
 ///
 /// Style contains only visual/themeable properties like colors and text modifiers.
 /// Layout properties like border and padding should be set directly on widgets.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Style {
     pub fg_color: Option<Color>,
     pub bg_color: Option<Color>,

@@ -1,5 +1,6 @@
 //! Built-in widgets
 
+pub mod animated;
 pub mod button;
 pub mod calendar;
 pub mod checkbox;
@@ -25,6 +26,7 @@ pub mod text_input;
 pub mod textarea;
 pub mod tree;
 
+pub use animated::{animate, Animated};
 pub use button::{button, Button, ButtonVariant};
 pub use calendar::{calendar, Calendar, CalendarDate, CalendarState};
 pub use checkbox::{checkbox, Checkbox};

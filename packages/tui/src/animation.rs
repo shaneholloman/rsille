@@ -5,6 +5,7 @@ use std::time::{Duration, Instant};
 
 use render::area::{Area, Position, Size};
 
+use crate::style::Style;
 use crate::widget::WidgetPath;
 
 const VALUE_EPSILON: f64 = 0.000_001;
@@ -171,6 +172,143 @@ pub enum Direction {
     Normal,
     Reverse,
     Alternate,
+}
+
+/// A concrete transition effect used by presence and animation wrappers.
+///
+/// Terminal UIs do not have pixel transforms, so spatial effects are expressed
+/// as cell-area transitions and clipping policies.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Transition {
+    pub spec: AnimationSpec,
+    pub effect: TransitionEffect,
+}
+
+impl Transition {
+    pub fn new(effect: TransitionEffect, spec: AnimationSpec) -> Self {
+        Self { effect, spec }
+    }
+
+    pub fn fade_in() -> Self {
+        Self::new(TransitionEffect::Fade, AnimationSpec::fast())
+    }
+
+    pub fn fade_out() -> Self {
+        Self::new(TransitionEffect::Fade, AnimationSpec::fast())
+    }
+
+    pub fn collapse() -> Self {
+        Self::new(TransitionEffect::Collapse, AnimationSpec::fast())
+    }
+
+    pub fn expand() -> Self {
+        Self::new(TransitionEffect::Expand, AnimationSpec::fast())
+    }
+
+    pub fn scale_from_center() -> Self {
+        Self::new(TransitionEffect::ScaleFromCenter, AnimationSpec::normal())
+    }
+
+    pub fn layout(transition: LayoutTransition) -> Self {
+        let spec = transition
+            .position
+            .or(transition.size)
+            .unwrap_or_else(AnimationSpec::normal);
+        Self::new(TransitionEffect::Layout(transition), spec)
+    }
+}
+
+/// Built-in transition families.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum TransitionEffect {
+    Fade,
+    Collapse,
+    Expand,
+    ScaleFromCenter,
+    BorderEmphasis,
+    Layout(LayoutTransition),
+}
+
+/// Timeline composition for animation orchestration.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Timeline {
+    Single(Transition),
+    Sequence(Vec<Timeline>),
+    Parallel(Vec<Timeline>),
+    Stagger {
+        delay: Duration,
+        children: Vec<Timeline>,
+    },
+}
+
+impl Timeline {
+    pub fn single(transition: Transition) -> Self {
+        Self::Single(transition)
+    }
+
+    pub fn sequence(children: Vec<Timeline>) -> Self {
+        Self::Sequence(children)
+    }
+
+    pub fn parallel(children: Vec<Timeline>) -> Self {
+        Self::Parallel(children)
+    }
+
+    pub fn stagger(delay: Duration, children: Vec<Timeline>) -> Self {
+        Self::Stagger { delay, children }
+    }
+}
+
+impl From<Transition> for Timeline {
+    fn from(transition: Transition) -> Self {
+        Self::Single(transition)
+    }
+}
+
+/// Whether a present widget should play its initial enter transition.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InitialAnimation {
+    Play,
+    Skip,
+}
+
+/// Presence declaration for widgets that need enter/exit lifecycle animation.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Presence {
+    pub enter: Option<Timeline>,
+    pub exit: Option<Timeline>,
+    pub initial: InitialAnimation,
+}
+
+impl Presence {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn enter(mut self, timeline: impl Into<Timeline>) -> Self {
+        self.enter = Some(timeline.into());
+        self
+    }
+
+    pub fn exit(mut self, timeline: impl Into<Timeline>) -> Self {
+        self.exit = Some(timeline.into());
+        self
+    }
+
+    pub fn initial(mut self, initial: InitialAnimation) -> Self {
+        self.initial = initial;
+        self
+    }
+}
+
+impl Default for Presence {
+    fn default() -> Self {
+        Self {
+            enter: None,
+            exit: None,
+            initial: InitialAnimation::Skip,
+        }
+    }
 }
 
 /// Global motion behavior applied by the runtime before widget animations run.
@@ -379,6 +517,14 @@ impl From<Area> for AreaF {
     }
 }
 
+/// Stored target and displayed areas for layout transitions.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LayoutSnapshot {
+    pub target: Area,
+    pub previous: Option<Area>,
+    pub displayed: AreaF,
+}
+
 /// Layout transition declaration for future layout-aware containers.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct LayoutTransition {
@@ -526,6 +672,216 @@ struct PulseAnimation {
     last_tick: Instant,
 }
 
+#[derive(Debug, Clone)]
+struct StyleAnimation {
+    displayed: Style,
+    start: Style,
+    target: Style,
+    started_at: Instant,
+    spec: AnimationSpec,
+    active: bool,
+}
+
+impl StyleAnimation {
+    fn new(target: Style, spec: AnimationSpec, now: Instant) -> Self {
+        Self {
+            displayed: target,
+            start: target,
+            target,
+            started_at: now,
+            spec,
+            active: false,
+        }
+    }
+
+    fn current_at(&self, now: Instant) -> Style {
+        if !self.active || self.displayed == self.target {
+            return self.target;
+        }
+
+        let (progress, complete) = self
+            .spec
+            .progress_at(now.saturating_duration_since(self.started_at));
+        if complete {
+            return self.target;
+        }
+
+        self.start.interpolate(self.target, progress)
+    }
+
+    fn update_to(&mut self, target: Style, spec: AnimationSpec, now: Instant) -> bool {
+        let before = self.displayed;
+        let current = self.current_at(now);
+        self.displayed = current;
+
+        if target != self.target {
+            self.start = current;
+            self.target = target;
+            self.started_at = now;
+            self.spec = spec;
+            self.active = current != target && spec.has_motion();
+            if !self.active {
+                self.displayed = target;
+            }
+            return true;
+        }
+
+        if self.active {
+            let (_, complete) = self
+                .spec
+                .progress_at(now.saturating_duration_since(self.started_at));
+            if complete || self.displayed == self.target {
+                self.displayed = self.target;
+                self.active = false;
+            }
+
+            return true;
+        }
+
+        before != self.displayed
+    }
+
+    fn advance(&mut self, now: Instant) -> bool {
+        if !self.active {
+            return false;
+        }
+
+        let before = self.displayed;
+        self.displayed = self.current_at(now);
+        let (_, complete) = self
+            .spec
+            .progress_at(now.saturating_duration_since(self.started_at));
+        if complete || self.displayed == self.target {
+            self.displayed = self.target;
+            self.active = false;
+        }
+
+        self.active || before != self.displayed
+    }
+}
+
+#[derive(Debug, Clone)]
+struct LayoutAnimation {
+    displayed: AreaF,
+    start: AreaF,
+    target: AreaF,
+    previous: Option<Area>,
+    started_at: Instant,
+    transition: LayoutTransition,
+    active: bool,
+}
+
+impl LayoutAnimation {
+    fn new(target: Area, transition: LayoutTransition, now: Instant) -> Self {
+        let target_f = AreaF::from(target);
+        Self {
+            displayed: target_f,
+            start: target_f,
+            target: target_f,
+            previous: None,
+            started_at: now,
+            transition,
+            active: false,
+        }
+    }
+
+    fn current_at(&self, now: Instant) -> AreaF {
+        if !self.active || self.displayed == self.target {
+            return self.target;
+        }
+
+        let elapsed = now.saturating_duration_since(self.started_at);
+        let position_progress = self
+            .transition
+            .position
+            .map(|spec| spec.progress_at(elapsed).0)
+            .unwrap_or(1.0);
+        let size_progress = self
+            .transition
+            .size
+            .map(|spec| spec.progress_at(elapsed).0)
+            .unwrap_or(1.0);
+
+        AreaF {
+            x: lerp(self.start.x, self.target.x, position_progress),
+            y: lerp(self.start.y, self.target.y, position_progress),
+            width: lerp(self.start.width, self.target.width, size_progress),
+            height: lerp(self.start.height, self.target.height, size_progress),
+        }
+    }
+
+    fn is_complete(&self, now: Instant) -> bool {
+        let elapsed = now.saturating_duration_since(self.started_at);
+        let position_complete = self
+            .transition
+            .position
+            .map(|spec| spec.progress_at(elapsed).1)
+            .unwrap_or(true);
+        let size_complete = self
+            .transition
+            .size
+            .map(|spec| spec.progress_at(elapsed).1)
+            .unwrap_or(true);
+
+        position_complete && size_complete
+    }
+
+    fn update_to(&mut self, target: Area, transition: LayoutTransition, now: Instant) -> bool {
+        let before = self.displayed;
+        let current = self.current_at(now);
+        let target_f = AreaF::from(target);
+        self.displayed = current;
+
+        if !area_nearly_equal(target_f, self.target) {
+            self.previous = Some(self.target.to_area());
+            self.start = current;
+            self.target = target_f;
+            self.started_at = now;
+            self.transition = transition;
+            self.active = !area_nearly_equal(current, target_f)
+                && (transition.position.is_some() || transition.size.is_some());
+            if !self.active {
+                self.displayed = target_f;
+            }
+            return true;
+        }
+
+        if self.active {
+            if self.is_complete(now) || area_nearly_equal(self.displayed, self.target) {
+                self.displayed = self.target;
+                self.active = false;
+            }
+
+            return true;
+        }
+
+        !area_nearly_equal(before, self.displayed)
+    }
+
+    fn advance(&mut self, now: Instant) -> bool {
+        if !self.active {
+            return false;
+        }
+
+        let before = self.displayed;
+        self.displayed = self.current_at(now);
+        if self.is_complete(now) || area_nearly_equal(self.displayed, self.target) {
+            self.displayed = self.target;
+            self.active = false;
+        }
+
+        self.active || !area_nearly_equal(before, self.displayed)
+    }
+
+    fn snapshot(&self) -> LayoutSnapshot {
+        LayoutSnapshot {
+            target: self.target.to_area(),
+            previous: self.previous,
+            displayed: self.displayed,
+        }
+    }
+}
+
 impl PulseAnimation {
     fn new(now: Instant) -> Self {
         Self {
@@ -555,6 +911,8 @@ impl PulseAnimation {
 pub struct AnimationStore {
     values: HashMap<AnimationKey, ValueAnimation>,
     pulses: HashMap<AnimationKey, PulseAnimation>,
+    styles: HashMap<AnimationKey, StyleAnimation>,
+    layouts: HashMap<AnimationKey, LayoutAnimation>,
 }
 
 impl AnimationStore {
@@ -568,6 +926,16 @@ impl AnimationStore {
             .get(&key)
             .map(|state| state.displayed)
             .or_else(|| self.pulses.get(&key).map(|state| state.value))
+    }
+
+    pub fn layout_snapshot(&self, path: &WidgetPath, channel: &str) -> Option<LayoutSnapshot> {
+        let key = AnimationKey::new(path, channel);
+        self.layouts.get(&key).map(LayoutAnimation::snapshot)
+    }
+
+    pub fn style(&self, path: &WidgetPath, channel: &str) -> Option<Style> {
+        let key = AnimationKey::new(path, channel);
+        self.styles.get(&key).map(|state| state.displayed)
     }
 
     fn track_value(
@@ -600,10 +968,93 @@ impl AnimationStore {
         true
     }
 
+    fn track_style(
+        &mut self,
+        path: &WidgetPath,
+        channel: &str,
+        target: Style,
+        spec: AnimationSpec,
+        now: Instant,
+    ) -> bool {
+        let key = AnimationKey::new(path, channel);
+        self.styles
+            .entry(key)
+            .or_insert_with(|| StyleAnimation::new(target, spec, now))
+            .update_to(target, spec, now)
+    }
+
     fn remove_channel(&mut self, path: &WidgetPath, channel: &str) {
         let key = AnimationKey::new(path, channel);
         self.values.remove(&key);
         self.pulses.remove(&key);
+        self.styles.remove(&key);
+        self.layouts.remove(&key);
+    }
+
+    pub fn track_layout(
+        &mut self,
+        path: &WidgetPath,
+        channel: &str,
+        target: Area,
+        transition: LayoutTransition,
+        now: Instant,
+        motion_policy: MotionPolicy,
+    ) -> (Area, bool) {
+        let transition = LayoutTransition {
+            position: transition
+                .position
+                .map(|spec| motion_policy.effective_spec(spec)),
+            size: transition
+                .size
+                .map(|spec| motion_policy.effective_spec(spec)),
+            clip: transition.clip,
+        };
+        let key = AnimationKey::new(path, channel);
+        let state = self
+            .layouts
+            .entry(key)
+            .or_insert_with(|| LayoutAnimation::new(target, transition, now));
+        let changed = state.update_to(target, transition, now);
+        (state.displayed.to_area(), changed || state.active)
+    }
+
+    /// Advance tracks that are already active without changing their targets.
+    pub fn advance(&mut self, now: Instant) -> bool {
+        let mut active = false;
+
+        for value in self.values.values_mut() {
+            if !value.active {
+                continue;
+            }
+
+            let before = value.displayed;
+            value.displayed = value.current_at(now);
+            let (_, complete) = value
+                .spec
+                .progress_at(now.saturating_duration_since(value.started_at));
+            if complete || nearly_equal(value.displayed, value.target) {
+                value.displayed = value.target;
+                value.active = false;
+            }
+            active |= value.active || !nearly_equal(before, value.displayed);
+        }
+
+        for layout in self.layouts.values_mut() {
+            active |= layout.advance(now);
+        }
+
+        for style in self.styles.values_mut() {
+            active |= style.advance(now);
+        }
+
+        active
+    }
+
+    pub fn has_active_animations(&self) -> bool {
+        self.values.values().any(|value| value.active)
+            || self.layouts.values().any(|layout| layout.active)
+            || self.styles.values().any(|style| style.active)
+            || !self.pulses.is_empty()
     }
 
     /// Remove animation channels whose widget path no longer exists.
@@ -613,6 +1064,8 @@ impl AnimationStore {
     {
         self.values.retain(|key, _| is_active(&key.path));
         self.pulses.retain(|key, _| is_active(&key.path));
+        self.styles.retain(|key, _| is_active(&key.path));
+        self.layouts.retain(|key, _| is_active(&key.path));
     }
 }
 
@@ -689,6 +1142,12 @@ impl<'a> AnimationCtx<'a> {
             .track_value(&self.path, channel, target, spec, self.now)
     }
 
+    pub fn track_style(&mut self, channel: &str, target: Style, spec: AnimationSpec) -> bool {
+        let spec = self.motion_policy.effective_spec(spec);
+        self.store
+            .track_style(&self.path, channel, target, spec, self.now)
+    }
+
     pub fn pulse(&mut self, channel: &str, interval: Duration) -> bool {
         let Some(interval) = self.motion_policy.effective_interval(interval) else {
             self.store.remove_channel(&self.path, channel);
@@ -701,6 +1160,13 @@ impl<'a> AnimationCtx<'a> {
 
 fn nearly_equal(a: f64, b: f64) -> bool {
     (a - b).abs() <= VALUE_EPSILON
+}
+
+fn area_nearly_equal(a: AreaF, b: AreaF) -> bool {
+    nearly_equal(a.x, b.x)
+        && nearly_equal(a.y, b.y)
+        && nearly_equal(a.width, b.width)
+        && nearly_equal(a.height, b.height)
 }
 
 fn scale_duration(duration: Duration, factor: f64) -> Duration {
@@ -881,10 +1347,18 @@ mod tests {
 
         store.track_value(&path, "value", 1.0, AnimationSpec::default(), now);
         store.pulse(&path, "spinner", Duration::from_millis(80), now);
+        store.track_style(
+            &path,
+            "style",
+            Style::default().fg(crate::style::Color::Red),
+            AnimationSpec::default(),
+            now,
+        );
         store.retain_active(|_| false);
 
         assert!(store.value(&path, "value").is_none());
         assert!(store.value(&path, "spinner").is_none());
+        assert!(store.style(&path, "style").is_none());
     }
 
     #[test]
@@ -897,5 +1371,72 @@ mod tests {
         assert_eq!(area.y(), 2);
         assert_eq!(area.width(), 15);
         assert_eq!(area.height(), 4);
+    }
+
+    #[test]
+    fn layout_track_retargets_from_displayed_area() {
+        let mut store = AnimationStore::new();
+        let path = path();
+        let start = Instant::now();
+        let spec = AnimationSpec::new(Duration::from_millis(100), Easing::Linear);
+        let transition = LayoutTransition::size_and_position(spec);
+        let first = Area::new((0, 0).into(), (10, 2).into());
+        let second = Area::new((10, 4).into(), (20, 6).into());
+
+        let (area, changed) = store.track_layout(
+            &path,
+            "layout",
+            first,
+            transition,
+            start,
+            MotionPolicy::default(),
+        );
+        assert_eq!(area, first);
+        assert!(!changed);
+
+        let (area, changed) = store.track_layout(
+            &path,
+            "layout",
+            second,
+            transition,
+            start,
+            MotionPolicy::default(),
+        );
+        assert_eq!(area, first);
+        assert!(changed);
+
+        assert!(store.advance(start + Duration::from_millis(50)));
+        let snapshot = store.layout_snapshot(&path, "layout").unwrap();
+        assert_eq!(snapshot.displayed.to_area().x(), 5);
+        assert_eq!(snapshot.displayed.to_area().width(), 15);
+    }
+
+    #[test]
+    fn style_track_interpolates_rgb_colors() {
+        let mut store = AnimationStore::new();
+        let path = path();
+        let start = Instant::now();
+        let spec = AnimationSpec::new(Duration::from_millis(100), Easing::Linear);
+
+        store.track_style(
+            &path,
+            "style",
+            Style::default().fg(crate::style::Color::Rgb(0, 0, 0)),
+            spec,
+            start,
+        );
+        assert!(store.track_style(
+            &path,
+            "style",
+            Style::default().fg(crate::style::Color::Rgb(100, 0, 0)),
+            spec,
+            start,
+        ));
+        assert!(store.advance(start + Duration::from_millis(50)));
+
+        assert_eq!(
+            store.style(&path, "style").unwrap().fg_color,
+            Some(crate::style::Color::Rgb(50, 0, 0))
+        );
     }
 }

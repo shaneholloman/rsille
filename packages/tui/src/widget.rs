@@ -7,10 +7,13 @@ use render::area::Area;
 use render::chunk::Chunk;
 use smallvec::SmallVec;
 
-use crate::animation::{AnimationCtx, AnimationStore};
+use crate::animation::{
+    AnimationCtx, AnimationStore, LayoutSnapshot, LayoutTransition, MotionPolicy,
+};
 use crate::event::Event;
 use crate::focus::FocusConfig;
 use crate::layout::Constraints;
+use crate::style::Style;
 use crate::style::Theme;
 
 // ---------------------------------------------------------------------------
@@ -241,13 +244,44 @@ impl<M> Widget<M> for Box<dyn Widget<M>> {
 ///
 /// Provides read-only access to the [`WidgetStore`], focus information,
 /// and the current render theme.
+#[derive(Clone, Copy)]
+enum AnimationStoreView<'a> {
+    ReadOnly(&'a AnimationStore),
+    Mutable(&'a RefCell<AnimationStore>),
+}
+
+impl AnimationStoreView<'_> {
+    fn value(self, path: &WidgetPath, channel: &str) -> Option<f64> {
+        match self {
+            Self::ReadOnly(store) => store.value(path, channel),
+            Self::Mutable(store) => store.borrow().value(path, channel),
+        }
+    }
+
+    fn style(self, path: &WidgetPath, channel: &str) -> Option<Style> {
+        match self {
+            Self::ReadOnly(store) => store.style(path, channel),
+            Self::Mutable(store) => store.borrow().style(path, channel),
+        }
+    }
+
+    fn layout_snapshot(self, path: &WidgetPath, channel: &str) -> Option<LayoutSnapshot> {
+        match self {
+            Self::ReadOnly(store) => store.layout_snapshot(path, channel),
+            Self::Mutable(store) => store.borrow().layout_snapshot(path, channel),
+        }
+    }
+}
+
 pub struct RenderCtx<'a> {
     store: &'a WidgetStore,
-    animation_store: &'a AnimationStore,
+    animation_store: AnimationStoreView<'a>,
     theme: &'a Theme,
     focused_path: Option<&'a WidgetPath>,
     current_path: WidgetPath,
     geometry: &'a RefCell<HashMap<WidgetPath, Area>>,
+    now: std::time::Instant,
+    motion_policy: MotionPolicy,
 }
 
 impl<'a> RenderCtx<'a> {
@@ -260,11 +294,34 @@ impl<'a> RenderCtx<'a> {
     ) -> Self {
         Self {
             store,
-            animation_store,
+            animation_store: AnimationStoreView::ReadOnly(animation_store),
             theme,
             focused_path,
             current_path: WidgetPath::root(),
             geometry,
+            now: std::time::Instant::now(),
+            motion_policy: MotionPolicy::default(),
+        }
+    }
+
+    pub(crate) fn with_runtime(
+        store: &'a WidgetStore,
+        animation_store: &'a RefCell<AnimationStore>,
+        theme: &'a Theme,
+        focused_path: Option<&'a WidgetPath>,
+        geometry: &'a RefCell<HashMap<WidgetPath, Area>>,
+        now: std::time::Instant,
+        motion_policy: MotionPolicy,
+    ) -> Self {
+        Self {
+            store,
+            animation_store: AnimationStoreView::Mutable(animation_store),
+            theme,
+            focused_path,
+            current_path: WidgetPath::root(),
+            geometry,
+            now,
+            motion_policy,
         }
     }
 
@@ -312,6 +369,34 @@ impl<'a> RenderCtx<'a> {
         self.animation_store.value(&self.current_path, channel)
     }
 
+    /// Read the current layout animation snapshot for this widget and channel.
+    pub fn layout_animation(&self, channel: &str) -> Option<LayoutSnapshot> {
+        self.animation_store
+            .layout_snapshot(&self.current_path, channel)
+    }
+
+    /// Read the current style animation value for this widget and channel.
+    pub fn animation_style(&self, channel: &str) -> Option<Style> {
+        self.animation_store.style(&self.current_path, channel)
+    }
+
+    /// Track a target area and return the animated display area.
+    pub fn track_layout(&self, channel: &str, target: Area, transition: LayoutTransition) -> Area {
+        let AnimationStoreView::Mutable(store) = self.animation_store else {
+            return target;
+        };
+
+        let (displayed, _) = store.borrow_mut().track_layout(
+            &self.current_path,
+            channel,
+            target,
+            transition,
+            self.now,
+            self.motion_policy,
+        );
+        displayed
+    }
+
     /// Read persistent state, or return a default reference if absent.
     /// This is a convenience that avoids `unwrap_or` at every call-site
     /// by falling back to a leaked static default. Use sparingly.
@@ -353,6 +438,8 @@ impl<'a> RenderCtx<'a> {
             focused_path: self.focused_path,
             current_path: self.current_path.child(key),
             geometry: self.geometry,
+            now: self.now,
+            motion_policy: self.motion_policy,
         }
     }
 

@@ -2,7 +2,8 @@
 
 pub use crate::animation::{
     AnimationConfig, AnimationSlot, AnimationSpec, AnimationTheme, AreaF, ClipMode,
-    Direction as AnimationDirection, Easing, LayoutTransition, MotionPolicy, Repeat,
+    Direction as AnimationDirection, Easing, InitialAnimation, LayoutSnapshot, LayoutTransition,
+    MotionPolicy, Presence, Repeat, Timeline, Transition, TransitionEffect,
 };
 pub use crate::app::{App, FrameInfo, QuitBehavior};
 pub use crate::effect::{
@@ -32,10 +33,10 @@ pub use crate::widget::{
     WidgetStore,
 };
 pub use crate::widgets::{
-    button, calendar, checkbox, code_viewer, collapsible, command_palette, data_table, dialog,
-    diff_viewer, divider, file_explorer, label, list, loading_indicator, log_viewer,
+    animate, button, calendar, checkbox, code_viewer, collapsible, command_palette, data_table,
+    dialog, diff_viewer, divider, file_explorer, label, list, loading_indicator, log_viewer,
     markdown_viewer, menu, panel, progress_bar, radio_group, select, spacer, switch, tabs,
-    text_input, textarea, toggle, tree, Button, ButtonVariant, Calendar, CalendarDate,
+    text_input, textarea, toggle, tree, Animated, Button, ButtonVariant, Calendar, CalendarDate,
     CalendarState, Checkbox, CodeViewer, Collapsible, CommandItem, CommandPalette,
     CommandPaletteState, ContentViewerState, DataTable, DataTableColumn, DataTableNavigationMode,
     DataTableRow, DataTableSort, DataTableSortDirection, DataTableState, Dialog, DiffViewer,

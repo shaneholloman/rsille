@@ -364,7 +364,7 @@ impl<State, M: Clone + std::fmt::Debug + Send + 'static> App<State, M> {
             update_fn: update,
             view_fn: view,
             store: WidgetStore::new(),
-            animation_store: AnimationStore::new(),
+            animation_store: RefCell::new(AnimationStore::new()),
             geometry: RefCell::new(HashMap::new()),
             focus: FocusManager::new(),
             cached_tree: None,
@@ -454,7 +454,7 @@ struct AppRuntime<State, U, V, M> {
     update_fn: U,
     view_fn: V,
     store: WidgetStore,
-    animation_store: AnimationStore,
+    animation_store: RefCell<AnimationStore>,
     geometry: RefCell<HashMap<WidgetPath, render::area::Area>>,
     focus: FocusManager,
     cached_tree: Option<Box<dyn Widget<M>>>,
@@ -495,6 +495,7 @@ impl<State, U, V, M: Send + 'static> AppRuntime<State, U, V, M> {
             self.store
                 .retain_active(|path| self.focus.live_paths().contains(path));
             self.animation_store
+                .borrow_mut()
                 .retain_active(|path| self.focus.live_paths().contains(path));
             self.cached_tree = Some(tree);
         }
@@ -723,15 +724,18 @@ impl<State, U, V, M: Send + 'static> AppRuntime<State, U, V, M> {
         let now = self.animation_now();
         let animation_theme = self.theme.animations;
         let tree = self.cached_tree.as_ref().unwrap();
-        Self::animate_widget_tree(
+        let mut store = self.animation_store.borrow_mut();
+        let mut needs_render = Self::animate_widget_tree(
             tree.as_ref(),
             &mut path,
-            &mut self.animation_store,
+            &mut store,
             focused_path.as_ref(),
             now,
             self.motion_policy,
             animation_theme,
-        )
+        );
+        needs_render |= store.advance(now);
+        needs_render
     }
 
     fn queue_tick_messages(&mut self) {
@@ -1021,17 +1025,21 @@ where
         self.store
             .retain_active(|path| self.focus.live_paths().contains(path));
         self.animation_store
+            .borrow_mut()
             .retain_active(|path| self.focus.live_paths().contains(path));
 
         // Render
+        let render_now = self.animation_now();
         let focused_path = self.focus.current_path();
         self.geometry.borrow_mut().clear();
-        let ctx = RenderCtx::new(
+        let ctx = RenderCtx::with_runtime(
             &self.store,
             &self.animation_store,
             &self.theme,
             focused_path,
             &self.geometry,
+            render_now,
+            self.motion_policy,
         );
         tree.render(&mut chunk, &ctx);
 
