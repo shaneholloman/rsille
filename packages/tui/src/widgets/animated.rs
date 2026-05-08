@@ -160,6 +160,10 @@ impl<M> Widget<M> for Animated<M> {
         self.child.constraints()
     }
 
+    fn presence(&self) -> Option<&Presence> {
+        Some(&self.presence)
+    }
+
     fn focus_config(&self) -> FocusConfig {
         FocusConfig::None
     }

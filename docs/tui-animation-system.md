@@ -36,12 +36,12 @@
 - [x] Transition / Timeline / Presence API：已提供 `Transition`、`TransitionEffect`、`Timeline`、`Presence`、`InitialAnimation` 类型并导出到 prelude。
 - [x] timeline executor：`AnimationStore` 已支持 timeline track，`Sequence`、`Parallel`、`Stagger` 会统一展开、调度、推进并纳入 active animation 判断。
 - [x] wrapper enter runtime：`Animated` 已通过 `RenderCtx::track_timeline` 接入 enter timeline，并支持 expand/collapse、center scale 这类 TUI cell-area 过渡。
+- [x] wrapper exit runtime：runtime 已能在 view tree diff 后保留旧 visual tree，渲染 exiting visual node，并在 exit timeline 完成后 prune。
 - [x] 状态清理：当前 live widget tree 消失的路径会从 animation store 中清理。
 - [x] 测试覆盖：已覆盖 value retarget、delay、disabled motion、pulse 清理、layout retarget、style interpolation、timeline sequence/stagger 等核心行为。
 
 仍然预留、尚未完整运行时化的部分：
 
-- [ ] 完整 exit presence runtime：widget 从 view tree 消失后，旧 visual node 的保留、渲染和最终 prune 还未落地。
 - [ ] 全局 layout diff pipeline：当前 layout transition 通过 wrapper/render 阶段 target area 驱动，尚未实现文档中完整的 layout 前后 tree snapshot diff。
 - [ ] shared transition：跨 widget path 的 shared element/area transition 仍为后续扩展。
 

@@ -9,7 +9,9 @@ use render::area::Size;
 use render::chunk::Chunk;
 use render::{Draw, DrawErr, Update};
 
-use crate::animation::{AnimationCtx, AnimationStore, MotionPolicy};
+use crate::animation::{
+    AnimationCtx, AnimationStore, MotionPolicy, Presence, Timeline, TimelineFrame, TransitionEffect,
+};
 use crate::effect::{
     run_task_attempt, sleep_with_cancellation, CancellationToken, Effect, Task, TaskEvent,
     TaskEventSender, TaskId, TaskState, TaskStatus, UpdateCtx,
@@ -368,6 +370,9 @@ impl<State, M: Clone + std::fmt::Debug + Send + 'static> App<State, M> {
             geometry: RefCell::new(HashMap::new()),
             focus: FocusManager::new(),
             cached_tree: None,
+            presence_previous_tree: None,
+            presence_previous_geometry: HashMap::new(),
+            exiting_visuals: Vec::new(),
             messages: Vec::new(),
             should_quit: false,
             quit_behavior,
@@ -458,6 +463,9 @@ struct AppRuntime<State, U, V, M> {
     geometry: RefCell<HashMap<WidgetPath, render::area::Area>>,
     focus: FocusManager,
     cached_tree: Option<Box<dyn Widget<M>>>,
+    presence_previous_tree: Option<Box<dyn Widget<M>>>,
+    presence_previous_geometry: HashMap<WidgetPath, render::area::Area>,
+    exiting_visuals: Vec<ExitingVisual<M>>,
     messages: Vec<M>,
     should_quit: bool,
     quit_behavior: QuitBehavior,
@@ -482,6 +490,47 @@ struct AppRuntime<State, U, V, M> {
     task_order: Vec<TaskId>,
 }
 
+struct ExitingVisual<M> {
+    root: Box<dyn Widget<M>>,
+    nodes: Vec<ExitingNode>,
+}
+
+struct ExitingNode {
+    path: WidgetPath,
+    bounds: render::area::Area,
+}
+
+fn exit_display_area(area: render::area::Area, frames: &[TimelineFrame]) -> render::area::Area {
+    frames
+        .iter()
+        .fold(area, |display_area, frame| match frame.transition.effect {
+            TransitionEffect::Collapse | TransitionEffect::Expand => {
+                vertical_area_for_exit(display_area, 1.0 - frame.progress)
+            }
+            TransitionEffect::ScaleFromCenter => {
+                scale_area_for_exit(display_area, 1.0 - frame.progress)
+            }
+            TransitionEffect::Layout(_)
+            | TransitionEffect::Fade
+            | TransitionEffect::BorderEmphasis => display_area,
+        })
+}
+
+fn vertical_area_for_exit(area: render::area::Area, progress: f64) -> render::area::Area {
+    let height = ((area.height() as f64) * progress.clamp(0.0, 1.0)).round() as u16;
+    render::area::Area::new(area.pos(), (area.width(), height).into())
+}
+
+fn scale_area_for_exit(area: render::area::Area, progress: f64) -> render::area::Area {
+    let progress = progress.clamp(0.0, 1.0);
+    let width = ((area.width() as f64) * progress).round() as u16;
+    let height = ((area.height() as f64) * progress).round() as u16;
+    let x = area.x() + area.width().saturating_sub(width) / 2;
+    let y = area.y() + area.height().saturating_sub(height) / 2;
+
+    render::area::Area::new((x, y).into(), (width, height).into())
+}
+
 impl<State, U, V, M: Send + 'static> AppRuntime<State, U, V, M> {
     const MAX_TRACKED_TASKS: usize = 256;
 
@@ -492,12 +541,105 @@ impl<State, U, V, M: Send + 'static> AppRuntime<State, U, V, M> {
         if self.cached_tree.is_none() {
             let tree = (self.view_fn)(&self.state);
             self.focus.rebuild(tree.as_ref());
-            self.store
-                .retain_active(|path| self.focus.live_paths().contains(path));
-            self.animation_store
-                .borrow_mut()
-                .retain_active(|path| self.focus.live_paths().contains(path));
+            self.retain_state_for_live_and_exiting_paths();
             self.cached_tree = Some(tree);
+        }
+    }
+
+    fn exiting_paths(&self) -> Vec<WidgetPath> {
+        self.exiting_visuals
+            .iter()
+            .flat_map(|visual| visual.nodes.iter().map(|node| node.path.clone()))
+            .collect()
+    }
+
+    fn retain_state_for_live_and_exiting_paths(&mut self) {
+        let live_paths: Vec<WidgetPath> = self.focus.live_paths().iter().cloned().collect();
+        let exiting_paths = self.exiting_paths();
+        let should_retain = |path: &WidgetPath| {
+            live_paths.iter().any(|live| live == path)
+                || exiting_paths.iter().any(|exit| path.starts_with(exit))
+        };
+
+        self.store.retain_active(should_retain);
+        self.animation_store.borrow_mut().retain_active(|path| {
+            live_paths.iter().any(|live| live == path)
+                || exiting_paths.iter().any(|exit| path.starts_with(exit))
+        });
+    }
+
+    fn collect_presence_declarations(
+        widget: &dyn Widget<M>,
+        path: &mut WidgetPath,
+        declarations: &mut HashMap<WidgetPath, Presence>,
+    ) {
+        if let Some(presence) = widget.presence() {
+            declarations.insert(path.clone(), presence.clone());
+        }
+
+        for (index, child) in widget.children().iter().enumerate() {
+            path.push(WidgetKey::for_child(index, child.as_ref()));
+            Self::collect_presence_declarations(child.as_ref(), path, declarations);
+            path.pop();
+        }
+    }
+
+    fn start_exit_visuals(
+        &mut self,
+        previous_tree: Box<dyn Widget<M>>,
+        previous_geometry: HashMap<WidgetPath, render::area::Area>,
+        now: Instant,
+    ) {
+        let mut previous_presence = HashMap::new();
+        let mut path = WidgetPath::root();
+        Self::collect_presence_declarations(
+            previous_tree.as_ref(),
+            &mut path,
+            &mut previous_presence,
+        );
+
+        if previous_presence.is_empty() {
+            return;
+        }
+
+        let live_paths: Vec<WidgetPath> = self.focus.live_paths().iter().cloned().collect();
+        let mut candidates: Vec<(WidgetPath, render::area::Area, Timeline)> = previous_presence
+            .into_iter()
+            .filter_map(|(path, presence)| {
+                if live_paths.iter().any(|live| live == &path) {
+                    return None;
+                }
+
+                let timeline = presence.exit?;
+                let bounds = previous_geometry.get(&path).copied()?;
+                Some((path, bounds, timeline))
+            })
+            .collect();
+
+        candidates.sort_by_key(|(path, _, _)| path.len());
+
+        let mut nodes: Vec<ExitingNode> = Vec::new();
+        for (path, bounds, timeline) in candidates {
+            if nodes.iter().any(|node| path.starts_with(&node.path)) {
+                continue;
+            }
+
+            self.animation_store.borrow_mut().track_timeline(
+                &path,
+                "exit",
+                timeline.clone(),
+                true,
+                now,
+                self.motion_policy,
+            );
+            nodes.push(ExitingNode { path, bounds });
+        }
+
+        if !nodes.is_empty() {
+            self.exiting_visuals.push(ExitingVisual {
+                root: previous_tree,
+                nodes,
+            });
         }
     }
 
@@ -736,6 +878,74 @@ impl<State, U, V, M: Send + 'static> AppRuntime<State, U, V, M> {
         );
         needs_render |= store.advance(now);
         needs_render
+    }
+
+    fn render_exiting_visuals(&self, chunk: &mut Chunk, ctx: &RenderCtx, now: Instant) {
+        for visual in &self.exiting_visuals {
+            for node in &visual.nodes {
+                let frames = self
+                    .animation_store
+                    .borrow()
+                    .timeline_frames(&node.path, "exit", now);
+                let display_area = exit_display_area(node.bounds, &frames);
+
+                if display_area.width() == 0 || display_area.height() == 0 {
+                    continue;
+                }
+
+                let _ = Self::render_widget_at_path(
+                    visual.root.as_ref(),
+                    node.path.as_slice(),
+                    chunk,
+                    ctx,
+                    display_area,
+                );
+            }
+        }
+    }
+
+    fn render_widget_at_path(
+        widget: &dyn Widget<M>,
+        path: &[WidgetKey],
+        chunk: &mut Chunk,
+        ctx: &RenderCtx,
+        area: render::area::Area,
+    ) -> bool {
+        let Some((key, rest)) = path.split_first() else {
+            let _ = chunk.with_clip(area, |child_chunk| {
+                widget.render(child_chunk, ctx);
+            });
+            return true;
+        };
+
+        let children = widget.children();
+        let child = match key {
+            WidgetKey::Index(index) => children.get(*index).map(|child| child.as_ref()),
+            WidgetKey::Named(name) => children
+                .iter()
+                .find(|child| child.key() == Some(name.as_str()))
+                .map(|child| child.as_ref()),
+        };
+
+        let Some(child) = child else {
+            return false;
+        };
+
+        let child_ctx = ctx.child_ctx(key.clone());
+        Self::render_widget_at_path(child, rest, chunk, &child_ctx, area)
+    }
+
+    fn prune_completed_exit_visuals(&mut self, now: Instant) {
+        let animation_store = self.animation_store.borrow();
+        for visual in &mut self.exiting_visuals {
+            visual
+                .nodes
+                .retain(|node| animation_store.timeline_is_active(&node.path, "exit", now));
+        }
+        drop(animation_store);
+
+        self.exiting_visuals
+            .retain(|visual| !visual.nodes.is_empty());
     }
 
     fn queue_tick_messages(&mut self) {
@@ -1022,14 +1232,16 @@ where
 
         // Rebuild focus chain
         self.focus.rebuild(tree.as_ref());
-        self.store
-            .retain_active(|path| self.focus.live_paths().contains(path));
-        self.animation_store
-            .borrow_mut()
-            .retain_active(|path| self.focus.live_paths().contains(path));
+
+        let render_now = self.animation_now();
+        if let Some(previous_tree) = self.presence_previous_tree.take() {
+            let previous_geometry = std::mem::take(&mut self.presence_previous_geometry);
+            self.start_exit_visuals(previous_tree, previous_geometry, render_now);
+        }
+
+        self.retain_state_for_live_and_exiting_paths();
 
         // Render
-        let render_now = self.animation_now();
         let focused_path = self.focus.current_path();
         self.geometry.borrow_mut().clear();
         let ctx = RenderCtx::with_runtime(
@@ -1042,6 +1254,9 @@ where
             self.motion_policy,
         );
         tree.render(&mut chunk, &ctx);
+        self.render_exiting_visuals(&mut chunk, &ctx, render_now);
+        self.prune_completed_exit_visuals(render_now);
+        self.retain_state_for_live_and_exiting_paths();
 
         // Cache tree for event handling in on_events()
         self.cached_tree = Some(tree);
@@ -1177,8 +1392,14 @@ where
         }
 
         if processed_messages {
-            // Invalidate cached tree so draw() rebuilds it
-            self.cached_tree = None;
+            // Preserve the last rendered tree so draw() can play exit presence
+            // for widgets that disappear from the next view tree.
+            if self.presence_previous_tree.is_none() {
+                self.presence_previous_tree = self.cached_tree.take();
+                self.presence_previous_geometry = self.geometry.borrow().clone();
+            } else {
+                self.cached_tree = None;
+            }
         }
 
         self.sync_theme();
@@ -1207,5 +1428,51 @@ where
             }
         }
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::animation::{AnimationSpec, Easing, Transition};
+
+    #[test]
+    fn exit_collapse_reduces_height_without_moving_origin() {
+        let area = render::area::Area::new((2, 3).into(), (10, 6).into());
+        let frame = TimelineFrame {
+            transition: Transition::new(
+                TransitionEffect::Collapse,
+                AnimationSpec::new(Duration::from_millis(100), Easing::Linear),
+            ),
+            progress: 0.5,
+            complete: false,
+        };
+
+        let display = exit_display_area(area, &[frame]);
+
+        assert_eq!(display.x(), 2);
+        assert_eq!(display.y(), 3);
+        assert_eq!(display.width(), 10);
+        assert_eq!(display.height(), 3);
+    }
+
+    #[test]
+    fn exit_scale_from_center_collapses_around_center() {
+        let area = render::area::Area::new((2, 4).into(), (10, 6).into());
+        let frame = TimelineFrame {
+            transition: Transition::new(
+                TransitionEffect::ScaleFromCenter,
+                AnimationSpec::new(Duration::from_millis(100), Easing::Linear),
+            ),
+            progress: 0.5,
+            complete: false,
+        };
+
+        let display = exit_display_area(area, &[frame]);
+
+        assert_eq!(display.x(), 4);
+        assert_eq!(display.y(), 5);
+        assert_eq!(display.width(), 5);
+        assert_eq!(display.height(), 3);
     }
 }

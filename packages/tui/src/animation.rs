@@ -1100,6 +1100,19 @@ impl AnimationStore {
             .unwrap_or_default()
     }
 
+    pub(crate) fn timeline_is_active(
+        &self,
+        path: &WidgetPath,
+        channel: &str,
+        now: Instant,
+    ) -> bool {
+        let key = AnimationKey::new(path, channel);
+        self.timelines
+            .get(&key)
+            .map(|state| state.active && !state.is_complete(now))
+            .unwrap_or(false)
+    }
+
     fn track_value(
         &mut self,
         path: &WidgetPath,
@@ -1768,5 +1781,26 @@ mod tests {
         assert_eq!(frames.len(), 2);
         assert!((frames[0].progress - 0.5).abs() < 0.001);
         assert!((frames[1].progress - 0.25).abs() < 0.001);
+    }
+
+    #[test]
+    fn timeline_active_reports_completion() {
+        let mut store = AnimationStore::new();
+        let path = path();
+        let start = Instant::now();
+        let spec = AnimationSpec::new(Duration::from_millis(100), Easing::Linear);
+        let timeline = Timeline::single(Transition::new(TransitionEffect::Collapse, spec));
+
+        store.track_timeline(
+            &path,
+            "exit",
+            timeline,
+            true,
+            start,
+            MotionPolicy::default(),
+        );
+
+        assert!(store.timeline_is_active(&path, "exit", start + Duration::from_millis(50)));
+        assert!(!store.timeline_is_active(&path, "exit", start + Duration::from_millis(100)));
     }
 }

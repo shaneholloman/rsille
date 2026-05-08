@@ -8,8 +8,8 @@ use render::chunk::Chunk;
 use smallvec::SmallVec;
 
 use crate::animation::{
-    AnimationCtx, AnimationStore, LayoutSnapshot, LayoutTransition, MotionPolicy, Timeline,
-    TimelineFrame,
+    AnimationCtx, AnimationStore, LayoutSnapshot, LayoutTransition, MotionPolicy, Presence,
+    Timeline, TimelineFrame,
 };
 use crate::event::Event;
 use crate::focus::FocusConfig;
@@ -183,6 +183,11 @@ pub trait Widget<M> {
         false
     }
 
+    /// Presence declaration used by the runtime for enter/exit lifecycle animation.
+    fn presence(&self) -> Option<&Presence> {
+        None
+    }
+
     /// Return size constraints for layout computation.
     fn constraints(&self) -> Constraints;
 
@@ -218,6 +223,10 @@ impl<M> Widget<M> for Box<dyn Widget<M>> {
 
     fn animate(&self, ctx: &mut AnimationCtx) -> bool {
         (**self).animate(ctx)
+    }
+
+    fn presence(&self) -> Option<&Presence> {
+        (**self).presence()
     }
 
     fn constraints(&self) -> Constraints {
