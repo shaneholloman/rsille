@@ -130,6 +130,20 @@ impl Style {
             (None, None) => RenderStyle::default(),
         }
     }
+
+    /// Interpolate this style toward another style.
+    ///
+    /// RGB colors are blended. Named and indexed terminal colors fall back to a
+    /// discrete switch at the halfway point, matching terminal capability
+    /// constraints.
+    pub fn interpolate(self, target: Style, progress: f64) -> Self {
+        let progress = progress.clamp(0.0, 1.0);
+        Self {
+            fg_color: interpolate_optional_color(self.fg_color, target.fg_color, progress),
+            bg_color: interpolate_optional_color(self.bg_color, target.bg_color, progress),
+            modifiers: self.modifiers.interpolate(target.modifiers, progress),
+        }
+    }
 }
 
 /// Terminal colors
@@ -147,6 +161,26 @@ pub enum Color {
     Rgb(u8, u8, u8),
     /// 256-color palette index
     Indexed(u8),
+}
+
+impl Color {
+    pub fn interpolate(self, target: Color, progress: f64) -> Color {
+        let progress = progress.clamp(0.0, 1.0);
+        match (self, target) {
+            (Color::Rgb(sr, sg, sb), Color::Rgb(tr, tg, tb)) => Color::Rgb(
+                lerp_u8(sr, tr, progress),
+                lerp_u8(sg, tg, progress),
+                lerp_u8(sb, tb, progress),
+            ),
+            (start, end) => {
+                if progress < 0.5 {
+                    start
+                } else {
+                    end
+                }
+            }
+        }
+    }
 }
 
 /// Text modifiers
@@ -206,6 +240,45 @@ impl TextModifiers {
     pub const fn is_empty(&self) -> bool {
         self.bits == 0
     }
+
+    pub fn interpolate(self, target: Self, progress: f64) -> Self {
+        if progress < 0.5 {
+            self
+        } else {
+            target
+        }
+    }
+}
+
+fn interpolate_optional_color(
+    start: Option<Color>,
+    end: Option<Color>,
+    progress: f64,
+) -> Option<Color> {
+    match (start, end) {
+        (Some(start), Some(end)) => Some(start.interpolate(end, progress)),
+        (Some(start), None) => {
+            if progress < 0.5 {
+                Some(start)
+            } else {
+                None
+            }
+        }
+        (None, Some(end)) => {
+            if progress < 0.5 {
+                None
+            } else {
+                Some(end)
+            }
+        }
+        (None, None) => None,
+    }
+}
+
+fn lerp_u8(start: u8, end: u8, progress: f64) -> u8 {
+    (start as f64 + (end as f64 - start as f64) * progress)
+        .round()
+        .clamp(0.0, u8::MAX as f64) as u8
 }
 
 /// Convert TUI Color to crossterm Color
@@ -222,5 +295,34 @@ fn color_to_crossterm(color: Color) -> crossterm::style::Color {
         Color::White => CC::White,
         Color::Rgb(r, g, b) => CC::Rgb { r, g, b },
         Color::Indexed(i) => CC::AnsiValue(i),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rgb_colors_interpolate_smoothly() {
+        let start = Color::Rgb(0, 10, 20);
+        let end = Color::Rgb(100, 110, 120);
+
+        assert_eq!(start.interpolate(end, 0.5), Color::Rgb(50, 60, 70));
+    }
+
+    #[test]
+    fn named_colors_switch_discretely() {
+        assert_eq!(Color::Red.interpolate(Color::Blue, 0.49), Color::Red);
+        assert_eq!(Color::Red.interpolate(Color::Blue, 0.5), Color::Blue);
+    }
+
+    #[test]
+    fn style_interpolates_colors_and_modifiers() {
+        let start = Style::default().fg(Color::Rgb(0, 0, 0));
+        let end = Style::default().fg(Color::Rgb(10, 20, 30)).bold();
+
+        let mid = start.interpolate(end, 0.5);
+        assert_eq!(mid.fg_color, Some(Color::Rgb(5, 10, 15)));
+        assert!(mid.modifiers.contains_bold());
     }
 }

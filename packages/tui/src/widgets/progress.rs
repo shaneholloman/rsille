@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-use crate::animation::{AnimationCtx, AnimationSpec};
+use crate::animation::{AnimationConfig, AnimationCtx, AnimationSlot, AnimationSpec};
 use crate::layout::Constraints;
 use crate::style::Style;
 use crate::widget::{RenderCtx, Widget};
@@ -17,7 +17,7 @@ pub struct ProgressBar<M = ()> {
     width: u16,
     custom_style: Option<Style>,
     fill_style: Option<Style>,
-    animation: Option<AnimationSpec>,
+    animation: Option<AnimationConfig>,
     widget_key: Option<String>,
     marker: std::marker::PhantomData<fn() -> M>,
 }
@@ -67,12 +67,12 @@ impl<M> ProgressBar<M> {
     }
 
     pub fn animated(mut self) -> Self {
-        self.animation = Some(AnimationSpec::default());
+        self.animation = Some(AnimationConfig::Theme(AnimationSlot::Normal));
         self
     }
 
     pub fn animation(mut self, spec: AnimationSpec) -> Self {
-        self.animation = Some(spec);
+        self.animation = Some(AnimationConfig::Custom(spec));
         self
     }
 }
@@ -120,10 +120,11 @@ impl<M> Widget<M> for ProgressBar<M> {
     }
 
     fn animate(&self, ctx: &mut AnimationCtx) -> bool {
-        let Some(spec) = self.animation else {
+        let Some(animation) = self.animation else {
             return false;
         };
 
+        let spec = animation.resolve(ctx.animation_theme());
         ctx.track_value("value", self.value.clamp(0.0, 1.0), spec)
     }
 
@@ -286,6 +287,14 @@ mod tests {
 
     use super::*;
 
+    fn animation_ctx<'a>(
+        store: &'a mut AnimationStore,
+        path: WidgetPath,
+        now: Instant,
+    ) -> AnimationCtx<'a> {
+        AnimationCtx::new(store, path, None, now)
+    }
+
     #[test]
     fn progress_animation_advances_and_finishes() {
         let mut store = AnimationStore::new();
@@ -293,34 +302,24 @@ mod tests {
         let start = Instant::now();
 
         let initial = ProgressBar::<()>::new(0.0).animated();
-        let mut ctx = AnimationCtx::new(&mut store, path.clone(), None, start);
+        let mut ctx = animation_ctx(&mut store, path.clone(), start);
         assert!(!initial.animate(&mut ctx));
         assert_eq!(store.value(&path, "value"), Some(0.0));
 
         let next = ProgressBar::<()>::new(1.0).animated();
-        let mut ctx = AnimationCtx::new(&mut store, path.clone(), None, start);
+        let mut ctx = animation_ctx(&mut store, path.clone(), start);
         assert!(next.animate(&mut ctx));
 
-        let mut ctx = AnimationCtx::new(
-            &mut store,
-            path.clone(),
-            None,
-            start + Duration::from_millis(90),
-        );
+        let mut ctx = animation_ctx(&mut store, path.clone(), start + Duration::from_millis(90));
         assert!(next.animate(&mut ctx));
         let midway = store.value(&path, "value").unwrap();
         assert!(midway > 0.0 && midway < 1.0);
 
-        let mut ctx = AnimationCtx::new(
-            &mut store,
-            path.clone(),
-            None,
-            start + Duration::from_millis(180),
-        );
+        let mut ctx = animation_ctx(&mut store, path.clone(), start + Duration::from_millis(180));
         assert!(next.animate(&mut ctx));
         assert_eq!(store.value(&path, "value"), Some(1.0));
 
-        let mut ctx = AnimationCtx::new(&mut store, path, None, start + Duration::from_millis(200));
+        let mut ctx = animation_ctx(&mut store, path, start + Duration::from_millis(200));
         assert!(!next.animate(&mut ctx));
     }
 
@@ -331,21 +330,16 @@ mod tests {
         let start = Instant::now();
 
         let static_indicator = LoadingIndicator::<()>::new().frame(2);
-        let mut ctx = AnimationCtx::new(&mut store, path.clone(), None, start);
+        let mut ctx = animation_ctx(&mut store, path.clone(), start);
         assert!(!static_indicator.animate(&mut ctx));
         assert!(store.value(&path, "spinner").is_none());
 
         let animated = LoadingIndicator::<()>::new().frame(2).animated();
-        let mut ctx = AnimationCtx::new(&mut store, path.clone(), None, start);
+        let mut ctx = animation_ctx(&mut store, path.clone(), start);
         assert!(animated.animate(&mut ctx));
         assert_eq!(store.value(&path, "spinner"), Some(0.0));
 
-        let mut ctx = AnimationCtx::new(
-            &mut store,
-            path.clone(),
-            None,
-            start + Duration::from_millis(90),
-        );
+        let mut ctx = animation_ctx(&mut store, path.clone(), start + Duration::from_millis(90));
         assert!(animated.animate(&mut ctx));
         assert_eq!(store.value(&path, "spinner"), Some(1.0));
     }

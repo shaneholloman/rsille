@@ -2,7 +2,7 @@
 
 use unicode_width::UnicodeWidthStr;
 
-use crate::animation::{AnimationCtx, AnimationSpec};
+use crate::animation::{AnimationConfig, AnimationCtx, AnimationSlot, AnimationSpec};
 use crate::event::{Event, KeyCode};
 use crate::focus::FocusConfig;
 use crate::layout::Constraints;
@@ -16,7 +16,7 @@ pub struct Switch<M = ()> {
     disabled: bool,
     custom_style: Option<Style>,
     custom_focus_style: Option<Style>,
-    animation: Option<AnimationSpec>,
+    animation: Option<AnimationConfig>,
     on_change: Option<Box<dyn Fn(bool) -> M>>,
     widget_key: Option<String>,
 }
@@ -72,12 +72,12 @@ impl<M> Switch<M> {
     }
 
     pub fn animated(mut self) -> Self {
-        self.animation = Some(AnimationSpec::default());
+        self.animation = Some(AnimationConfig::Theme(AnimationSlot::Normal));
         self
     }
 
     pub fn animation(mut self, spec: AnimationSpec) -> Self {
-        self.animation = Some(spec);
+        self.animation = Some(AnimationConfig::Custom(spec));
         self
     }
 
@@ -153,11 +153,12 @@ impl<M> Widget<M> for Switch<M> {
     }
 
     fn animate(&self, ctx: &mut AnimationCtx) -> bool {
-        let Some(spec) = self.animation else {
+        let Some(animation) = self.animation else {
             return false;
         };
 
         let target = if self.checked { 1.0 } else { 0.0 };
+        let spec = animation.resolve(ctx.animation_theme());
         ctx.track_value("checked", target, spec)
     }
 

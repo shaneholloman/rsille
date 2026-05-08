@@ -9,7 +9,7 @@ use render::area::Size;
 use render::chunk::Chunk;
 use render::{Draw, DrawErr, Update};
 
-use crate::animation::{AnimationCtx, AnimationStore};
+use crate::animation::{AnimationCtx, AnimationStore, MotionPolicy};
 use crate::effect::{
     run_task_attempt, sleep_with_cancellation, CancellationToken, Effect, Task, TaskEvent,
     TaskEventSender, TaskId, TaskState, TaskStatus, UpdateCtx,
@@ -142,6 +142,7 @@ pub struct App<State, M = ()> {
     frame_handlers: Vec<FrameConfig<M>>,
     quit_behavior: QuitBehavior,
     mouse_capture: bool,
+    motion_policy: MotionPolicy,
 }
 
 impl<State: std::fmt::Debug, M> std::fmt::Debug for App<State, M> {
@@ -166,6 +167,7 @@ impl<State, M: Clone + std::fmt::Debug + Send + 'static> App<State, M> {
             frame_handlers: Vec::new(),
             quit_behavior: QuitBehavior::default(),
             mouse_capture: false,
+            motion_policy: MotionPolicy::default(),
         }
     }
 
@@ -182,6 +184,12 @@ impl<State, M: Clone + std::fmt::Debug + Send + 'static> App<State, M> {
         F: Fn(&State) -> Theme + 'static,
     {
         self.theme_resolver = Some(Box::new(resolver));
+        self
+    }
+
+    /// Configure global animation behavior.
+    pub fn with_motion_policy(mut self, motion_policy: MotionPolicy) -> Self {
+        self.motion_policy = motion_policy;
         self
     }
 
@@ -344,6 +352,7 @@ impl<State, M: Clone + std::fmt::Debug + Send + 'static> App<State, M> {
             frame_handlers,
             quit_behavior,
             mouse_capture,
+            motion_policy,
         } = self;
 
         let (task_sender, task_receiver) = mpsc::channel();
@@ -378,6 +387,9 @@ impl<State, M: Clone + std::fmt::Debug + Send + 'static> App<State, M> {
                 .map(|frame| frame.handler)
                 .collect(),
             frame_runtime: FrameRuntime::new(),
+            animation_epoch: Instant::now(),
+            animation_frame: 0,
+            motion_policy,
             inline_mode,
             inline_max_height,
             task_sender,
@@ -455,6 +467,9 @@ struct AppRuntime<State, U, V, M> {
     tick_handlers: Vec<TickRuntime<M>>,
     frame_handlers: Vec<FrameHandler<M>>,
     frame_runtime: FrameRuntime,
+    animation_epoch: Instant,
+    animation_frame: u64,
+    motion_policy: MotionPolicy,
     inline_mode: bool,
     inline_max_height: u16,
     task_sender: Sender<TaskEvent<M>>,
@@ -652,35 +667,70 @@ impl<State, U, V, M: Send + 'static> AppRuntime<State, U, V, M> {
         store: &mut AnimationStore,
         focused_path: Option<&WidgetPath>,
         now: Instant,
+        motion_policy: MotionPolicy,
+        animation_theme: crate::animation::AnimationTheme,
     ) -> bool {
         let mut needs_render = {
-            let mut ctx = AnimationCtx::new(store, path.clone(), focused_path, now);
+            let mut ctx = AnimationCtx::with_policy(
+                store,
+                path.clone(),
+                focused_path,
+                now,
+                motion_policy,
+                animation_theme,
+            );
             widget.animate(&mut ctx)
         };
 
         for (index, child) in widget.children().iter().enumerate() {
             path.push(WidgetKey::for_child(index, child.as_ref()));
-            needs_render |=
-                Self::animate_widget_tree(child.as_ref(), path, store, focused_path, now);
+            needs_render |= Self::animate_widget_tree(
+                child.as_ref(),
+                path,
+                store,
+                focused_path,
+                now,
+                motion_policy,
+                animation_theme,
+            );
             path.pop();
         }
 
         needs_render
     }
 
+    fn animation_now(&mut self) -> Instant {
+        if !self.motion_policy.deterministic {
+            return Instant::now();
+        }
+
+        let now = self.animation_epoch
+            + self
+                .motion_policy
+                .deterministic_step
+                .saturating_mul(self.animation_frame.min(u32::MAX as u64) as u32);
+        self.animation_frame = self.animation_frame.wrapping_add(1);
+        now
+    }
+
     fn animate_widgets(&mut self) -> bool {
-        let Some(tree) = self.cached_tree.as_ref() else {
+        if self.cached_tree.is_none() {
             return false;
-        };
+        }
 
         let focused_path = self.focus.current_path().cloned();
         let mut path = WidgetPath::root();
+        let now = self.animation_now();
+        let animation_theme = self.theme.animations;
+        let tree = self.cached_tree.as_ref().unwrap();
         Self::animate_widget_tree(
             tree.as_ref(),
             &mut path,
             &mut self.animation_store,
             focused_path.as_ref(),
-            Instant::now(),
+            now,
+            self.motion_policy,
+            animation_theme,
         )
     }
 
@@ -1123,6 +1173,7 @@ where
             self.cached_tree = None;
         }
 
+        self.sync_theme();
         self.ensure_tree();
         let needs_animation_frame = self.animate_widgets();
 

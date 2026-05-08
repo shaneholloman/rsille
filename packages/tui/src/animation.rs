@@ -1,7 +1,9 @@
-//! Component-level animation primitives.
+//! Animation primitives shared by TUI widgets and runtime policy.
 
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
+
+use render::area::{Area, Position, Size};
 
 use crate::widget::WidgetPath;
 
@@ -11,31 +13,125 @@ const VALUE_EPSILON: f64 = 0.000_001;
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct AnimationSpec {
     pub duration: Duration,
+    pub delay: Duration,
     pub easing: Easing,
+    pub repeat: Repeat,
+    pub direction: Direction,
 }
 
 impl AnimationSpec {
     pub fn new(duration: Duration, easing: Easing) -> Self {
-        Self { duration, easing }
+        Self {
+            duration,
+            delay: Duration::ZERO,
+            easing,
+            repeat: Repeat::Never,
+            direction: Direction::Normal,
+        }
+    }
+
+    pub fn fast() -> Self {
+        Self::new(Duration::from_millis(120), Easing::EaseOut)
+    }
+
+    pub fn normal() -> Self {
+        Self::default()
+    }
+
+    pub fn slow() -> Self {
+        Self::new(Duration::from_millis(320), Easing::EaseInOut)
+    }
+
+    pub fn delay(mut self, delay: Duration) -> Self {
+        self.delay = delay;
+        self
+    }
+
+    pub fn repeat(mut self, repeat: Repeat) -> Self {
+        self.repeat = repeat;
+        self
+    }
+
+    pub fn direction(mut self, direction: Direction) -> Self {
+        self.direction = direction;
+        self
+    }
+
+    pub fn scaled(self, speed: f64) -> Self {
+        if speed <= VALUE_EPSILON {
+            return self;
+        }
+
+        Self {
+            duration: scale_duration(self.duration, 1.0 / speed),
+            delay: scale_duration(self.delay, 1.0 / speed),
+            ..self
+        }
+    }
+
+    fn has_motion(self) -> bool {
+        !self.duration.is_zero() || !self.delay.is_zero()
+    }
+
+    fn progress_at(self, elapsed: Duration) -> (f64, bool) {
+        if elapsed < self.delay {
+            return (self.easing.sample(0.0), false);
+        }
+
+        if self.duration.is_zero() {
+            return (1.0, true);
+        }
+
+        let active_elapsed = elapsed.saturating_sub(self.delay);
+        let raw = active_elapsed.as_secs_f64() / self.duration.as_secs_f64();
+        let cycle = raw.floor() as u64;
+
+        let complete = match self.repeat {
+            Repeat::Never => raw >= 1.0,
+            Repeat::Count(count) => raw >= count.max(1) as f64,
+            Repeat::Forever => false,
+        };
+
+        if complete {
+            return (1.0, true);
+        }
+
+        let mut t = raw.fract();
+        if matches!(self.repeat, Repeat::Never) {
+            t = raw.clamp(0.0, 1.0);
+        }
+
+        let directed = match self.direction {
+            Direction::Normal => t,
+            Direction::Reverse => 1.0 - t,
+            Direction::Alternate => {
+                if cycle % 2 == 0 {
+                    t
+                } else {
+                    1.0 - t
+                }
+            }
+        };
+
+        (self.easing.sample(directed), false)
     }
 }
 
 impl Default for AnimationSpec {
     fn default() -> Self {
-        Self {
-            duration: Duration::from_millis(180),
-            easing: Easing::EaseOut,
-        }
+        Self::new(Duration::from_millis(180), Easing::EaseOut)
     }
 }
 
-/// Built-in easing curves for simple component animations.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Built-in easing curves for component and layout animations.
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Easing {
     Linear,
     EaseIn,
     EaseOut,
     EaseInOut,
+    CubicBezier(f64, f64, f64, f64),
+    Steps(u16),
 }
 
 impl Easing {
@@ -52,8 +148,291 @@ impl Easing {
                     1.0 - ((-2.0 * t + 2.0).powi(2) / 2.0)
                 }
             }
+            Self::CubicBezier(x1, y1, x2, y2) => cubic_bezier_y_for_x(t, x1, y1, x2, y2),
+            Self::Steps(steps) => {
+                let steps = steps.max(1) as f64;
+                (t * steps).ceil() / steps
+            }
         }
     }
+}
+
+/// Repeat behavior for a track.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Repeat {
+    Never,
+    Count(u16),
+    Forever,
+}
+
+/// Playback direction for repeating tracks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Direction {
+    Normal,
+    Reverse,
+    Alternate,
+}
+
+/// Global motion behavior applied by the runtime before widget animations run.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct MotionPolicy {
+    pub enabled: bool,
+    pub reduced_motion: bool,
+    pub speed: f64,
+    pub deterministic: bool,
+    pub deterministic_step: Duration,
+}
+
+impl MotionPolicy {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn disabled() -> Self {
+        Self {
+            enabled: false,
+            ..Self::default()
+        }
+    }
+
+    pub fn reduced_motion() -> Self {
+        Self {
+            reduced_motion: true,
+            ..Self::default()
+        }
+    }
+
+    pub fn deterministic(step: Duration) -> Self {
+        Self {
+            deterministic: true,
+            deterministic_step: if step.is_zero() {
+                Duration::from_millis(16)
+            } else {
+                step
+            },
+            ..Self::default()
+        }
+    }
+
+    pub fn with_speed(mut self, speed: f64) -> Self {
+        self.speed = speed.max(VALUE_EPSILON);
+        self
+    }
+
+    pub fn effective_spec(self, spec: AnimationSpec) -> AnimationSpec {
+        if !self.enabled || self.reduced_motion {
+            return AnimationSpec {
+                duration: Duration::ZERO,
+                delay: Duration::ZERO,
+                repeat: Repeat::Never,
+                direction: Direction::Normal,
+                ..spec
+            };
+        }
+
+        spec.scaled(self.speed)
+    }
+
+    pub fn effective_interval(self, interval: Duration) -> Option<Duration> {
+        if !self.enabled || self.reduced_motion {
+            return None;
+        }
+
+        Some(scale_duration(
+            interval,
+            1.0 / self.speed.max(VALUE_EPSILON),
+        ))
+    }
+}
+
+impl Default for MotionPolicy {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            reduced_motion: false,
+            speed: 1.0,
+            deterministic: false,
+            deterministic_step: Duration::from_millis(16),
+        }
+    }
+}
+
+/// Theme-level animation defaults.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct AnimationTheme {
+    pub fast: AnimationSpec,
+    pub normal: AnimationSpec,
+    pub slow: AnimationSpec,
+    pub focus: AnimationSpec,
+    pub layout: AnimationSpec,
+    pub enter: AnimationSpec,
+    pub exit: AnimationSpec,
+}
+
+impl Default for AnimationTheme {
+    fn default() -> Self {
+        Self {
+            fast: AnimationSpec::fast(),
+            normal: AnimationSpec::normal(),
+            slow: AnimationSpec::slow(),
+            focus: AnimationSpec::fast(),
+            layout: AnimationSpec::new(Duration::from_millis(220), Easing::EaseOut),
+            enter: AnimationSpec::new(Duration::from_millis(160), Easing::EaseOut),
+            exit: AnimationSpec::new(Duration::from_millis(120), Easing::EaseIn),
+        }
+    }
+}
+
+/// Named animation slots supplied by [`AnimationTheme`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AnimationSlot {
+    Fast,
+    Normal,
+    Slow,
+    Focus,
+    Layout,
+    Enter,
+    Exit,
+}
+
+impl AnimationTheme {
+    pub fn get(self, slot: AnimationSlot) -> AnimationSpec {
+        match slot {
+            AnimationSlot::Fast => self.fast,
+            AnimationSlot::Normal => self.normal,
+            AnimationSlot::Slow => self.slow,
+            AnimationSlot::Focus => self.focus,
+            AnimationSlot::Layout => self.layout,
+            AnimationSlot::Enter => self.enter,
+            AnimationSlot::Exit => self.exit,
+        }
+    }
+}
+
+/// A widget-level animation declaration.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum AnimationConfig {
+    Theme(AnimationSlot),
+    Custom(AnimationSpec),
+}
+
+impl AnimationConfig {
+    pub fn resolve(self, theme: AnimationTheme) -> AnimationSpec {
+        match self {
+            AnimationConfig::Theme(slot) => theme.get(slot),
+            AnimationConfig::Custom(spec) => spec,
+        }
+    }
+}
+
+/// Floating-point cell area used by layout animations before final rounding.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct AreaF {
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
+}
+
+impl AreaF {
+    pub fn new(x: f64, y: f64, width: f64, height: f64) -> Self {
+        Self {
+            x,
+            y,
+            width,
+            height,
+        }
+    }
+
+    pub fn lerp(self, target: Self, t: f64) -> Self {
+        let t = t.clamp(0.0, 1.0);
+        Self {
+            x: lerp(self.x, target.x, t),
+            y: lerp(self.y, target.y, t),
+            width: lerp(self.width, target.width, t),
+            height: lerp(self.height, target.height, t),
+        }
+    }
+
+    pub fn to_area(self) -> Area {
+        Area::new(
+            Position {
+                x: self.x.round().clamp(0.0, u16::MAX as f64) as u16,
+                y: self.y.round().clamp(0.0, u16::MAX as f64) as u16,
+            },
+            Size {
+                width: self.width.round().clamp(0.0, u16::MAX as f64) as u16,
+                height: self.height.round().clamp(0.0, u16::MAX as f64) as u16,
+            },
+        )
+    }
+}
+
+impl From<Area> for AreaF {
+    fn from(area: Area) -> Self {
+        Self {
+            x: area.x() as f64,
+            y: area.y() as f64,
+            width: area.width() as f64,
+            height: area.height() as f64,
+        }
+    }
+}
+
+/// Layout transition declaration for future layout-aware containers.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LayoutTransition {
+    pub position: Option<AnimationSpec>,
+    pub size: Option<AnimationSpec>,
+    pub clip: ClipMode,
+}
+
+impl LayoutTransition {
+    pub fn none() -> Self {
+        Self {
+            position: None,
+            size: None,
+            clip: ClipMode::None,
+        }
+    }
+
+    pub fn position(spec: AnimationSpec) -> Self {
+        Self {
+            position: Some(spec),
+            size: None,
+            clip: ClipMode::None,
+        }
+    }
+
+    pub fn size(spec: AnimationSpec) -> Self {
+        Self {
+            position: None,
+            size: Some(spec),
+            clip: ClipMode::ClipToAnimatedBounds,
+        }
+    }
+
+    pub fn size_and_position(spec: AnimationSpec) -> Self {
+        Self {
+            position: Some(spec),
+            size: Some(spec),
+            clip: ClipMode::ClipToAnimatedBounds,
+        }
+    }
+}
+
+impl Default for LayoutTransition {
+    fn default() -> Self {
+        Self::none()
+    }
+}
+
+/// How a layout transition clips child rendering.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClipMode {
+    None,
+    ClipToAnimatedBounds,
+    ClipToTargetBounds,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -98,19 +477,14 @@ impl ValueAnimation {
             return self.target;
         }
 
-        let duration = self.spec.duration;
-        if duration.is_zero() {
+        let (progress, complete) = self
+            .spec
+            .progress_at(now.saturating_duration_since(self.started_at));
+        if complete {
             return self.target;
         }
 
-        let raw_progress =
-            now.saturating_duration_since(self.started_at).as_secs_f64() / duration.as_secs_f64();
-        if raw_progress >= 1.0 {
-            return self.target;
-        }
-
-        let eased = self.spec.easing.sample(raw_progress);
-        self.start + (self.target - self.start) * eased
+        self.start + (self.target - self.start) * progress
     }
 
     fn update_to(&mut self, target: f64, spec: AnimationSpec, now: Instant) -> bool {
@@ -123,17 +497,18 @@ impl ValueAnimation {
             self.target = target;
             self.started_at = now;
             self.spec = spec;
-            self.active = !nearly_equal(current, target) && !spec.duration.is_zero();
-            if spec.duration.is_zero() {
+            self.active = !nearly_equal(current, target) && spec.has_motion();
+            if !self.active {
                 self.displayed = target;
             }
             return true;
         }
 
         if self.active {
-            if nearly_equal(self.displayed, self.target)
-                || now.saturating_duration_since(self.started_at) >= self.spec.duration
-            {
+            let (_, complete) = self
+                .spec
+                .progress_at(now.saturating_duration_since(self.started_at));
+            if complete || nearly_equal(self.displayed, self.target) {
                 self.displayed = self.target;
                 self.active = false;
             }
@@ -225,6 +600,12 @@ impl AnimationStore {
         true
     }
 
+    fn remove_channel(&mut self, path: &WidgetPath, channel: &str) {
+        let key = AnimationKey::new(path, channel);
+        self.values.remove(&key);
+        self.pulses.remove(&key);
+    }
+
     /// Remove animation channels whose widget path no longer exists.
     pub fn retain_active<F>(&mut self, mut is_active: F)
     where
@@ -241,6 +622,8 @@ pub struct AnimationCtx<'a> {
     path: WidgetPath,
     focused_path: Option<&'a WidgetPath>,
     now: Instant,
+    motion_policy: MotionPolicy,
+    animation_theme: AnimationTheme,
 }
 
 impl<'a> AnimationCtx<'a> {
@@ -250,11 +633,31 @@ impl<'a> AnimationCtx<'a> {
         focused_path: Option<&'a WidgetPath>,
         now: Instant,
     ) -> Self {
+        Self::with_policy(
+            store,
+            path,
+            focused_path,
+            now,
+            MotionPolicy::default(),
+            AnimationTheme::default(),
+        )
+    }
+
+    pub fn with_policy(
+        store: &'a mut AnimationStore,
+        path: WidgetPath,
+        focused_path: Option<&'a WidgetPath>,
+        now: Instant,
+        motion_policy: MotionPolicy,
+        animation_theme: AnimationTheme,
+    ) -> Self {
         Self {
             store,
             path,
             focused_path,
             now,
+            motion_policy,
+            animation_theme,
         }
     }
 
@@ -266,6 +669,14 @@ impl<'a> AnimationCtx<'a> {
         self.now
     }
 
+    pub fn motion_policy(&self) -> MotionPolicy {
+        self.motion_policy
+    }
+
+    pub fn animation_theme(&self) -> AnimationTheme {
+        self.animation_theme
+    }
+
     pub fn is_focused(&self) -> bool {
         self.focused_path
             .map(|path| path == &self.path)
@@ -273,17 +684,62 @@ impl<'a> AnimationCtx<'a> {
     }
 
     pub fn track_value(&mut self, channel: &str, target: f64, spec: AnimationSpec) -> bool {
+        let spec = self.motion_policy.effective_spec(spec);
         self.store
             .track_value(&self.path, channel, target, spec, self.now)
     }
 
     pub fn pulse(&mut self, channel: &str, interval: Duration) -> bool {
+        let Some(interval) = self.motion_policy.effective_interval(interval) else {
+            self.store.remove_channel(&self.path, channel);
+            return false;
+        };
+
         self.store.pulse(&self.path, channel, interval, self.now)
     }
 }
 
 fn nearly_equal(a: f64, b: f64) -> bool {
     (a - b).abs() <= VALUE_EPSILON
+}
+
+fn scale_duration(duration: Duration, factor: f64) -> Duration {
+    if duration.is_zero() {
+        return Duration::ZERO;
+    }
+
+    Duration::from_secs_f64((duration.as_secs_f64() * factor).max(0.0))
+}
+
+fn lerp(start: f64, end: f64, t: f64) -> f64 {
+    start + (end - start) * t
+}
+
+fn cubic_bezier_y_for_x(x: f64, x1: f64, y1: f64, x2: f64, y2: f64) -> f64 {
+    let x1 = x1.clamp(0.0, 1.0);
+    let x2 = x2.clamp(0.0, 1.0);
+    let mut t = x;
+
+    for _ in 0..8 {
+        let x_t = cubic_bezier(t, 0.0, x1, x2, 1.0);
+        let dx = cubic_bezier_derivative(t, 0.0, x1, x2, 1.0);
+        if dx.abs() < VALUE_EPSILON {
+            break;
+        }
+        t = (t - (x_t - x) / dx).clamp(0.0, 1.0);
+    }
+
+    cubic_bezier(t, 0.0, y1, y2, 1.0).clamp(0.0, 1.0)
+}
+
+fn cubic_bezier(t: f64, p0: f64, p1: f64, p2: f64, p3: f64) -> f64 {
+    let mt = 1.0 - t;
+    mt.powi(3) * p0 + 3.0 * mt.powi(2) * t * p1 + 3.0 * mt * t.powi(2) * p2 + t.powi(3) * p3
+}
+
+fn cubic_bezier_derivative(t: f64, p0: f64, p1: f64, p2: f64, p3: f64) -> f64 {
+    let mt = 1.0 - t;
+    3.0 * mt.powi(2) * (p1 - p0) + 6.0 * mt * t * (p2 - p1) + 3.0 * t.powi(2) * (p3 - p2)
 }
 
 #[cfg(test)]
@@ -301,6 +757,8 @@ mod tests {
             Easing::EaseIn,
             Easing::EaseOut,
             Easing::EaseInOut,
+            Easing::CubicBezier(0.25, 0.1, 0.25, 1.0),
+            Easing::Steps(4),
         ] {
             assert_eq!(easing.sample(0.0), 0.0);
             assert_eq!(easing.sample(1.0), 1.0);
@@ -322,6 +780,20 @@ mod tests {
 
         let displayed = store.value(&path, "value").unwrap();
         assert!((displayed - 0.5).abs() < 0.001);
+    }
+
+    #[test]
+    fn delay_holds_start_value_before_motion() {
+        let mut store = AnimationStore::new();
+        let path = path();
+        let start = Instant::now();
+        let spec = AnimationSpec::new(Duration::from_millis(100), Easing::Linear)
+            .delay(Duration::from_millis(50));
+
+        store.track_value(&path, "value", 0.0, spec, start);
+        assert!(store.track_value(&path, "value", 1.0, spec, start));
+        assert!(store.track_value(&path, "value", 1.0, spec, start + Duration::from_millis(25)));
+        assert_eq!(store.value(&path, "value"), Some(0.0));
     }
 
     #[test]
@@ -350,6 +822,58 @@ mod tests {
     }
 
     #[test]
+    fn disabled_motion_policy_jumps_to_target() {
+        let mut store = AnimationStore::new();
+        let path = path();
+        let start = Instant::now();
+        let policy = MotionPolicy::disabled();
+        let spec = policy.effective_spec(AnimationSpec::default());
+
+        store.track_value(&path, "value", 0.0, spec, start);
+        assert!(store.track_value(&path, "value", 1.0, spec, start));
+        assert_eq!(store.value(&path, "value"), Some(1.0));
+    }
+
+    #[test]
+    fn disabled_motion_policy_clears_pulse_channels() {
+        let mut store = AnimationStore::new();
+        let path = path();
+        let start = Instant::now();
+
+        {
+            let mut ctx = AnimationCtx::new(&mut store, path.clone(), None, start);
+            assert!(ctx.pulse("spinner", Duration::from_millis(80)));
+        }
+        assert_eq!(store.value(&path, "spinner"), Some(0.0));
+
+        {
+            let mut ctx = AnimationCtx::with_policy(
+                &mut store,
+                path.clone(),
+                None,
+                start,
+                MotionPolicy::disabled(),
+                AnimationTheme::default(),
+            );
+            assert!(!ctx.pulse("spinner", Duration::from_millis(80)));
+        }
+        assert_eq!(store.value(&path, "spinner"), None);
+    }
+
+    #[test]
+    fn animation_config_resolves_theme_slots() {
+        let theme = AnimationTheme {
+            focus: AnimationSpec::new(Duration::from_millis(42), Easing::Linear),
+            ..AnimationTheme::default()
+        };
+
+        assert_eq!(
+            AnimationConfig::Theme(AnimationSlot::Focus).resolve(theme),
+            theme.focus
+        );
+    }
+
+    #[test]
     fn inactive_paths_are_pruned() {
         let mut store = AnimationStore::new();
         let path = path();
@@ -361,5 +885,17 @@ mod tests {
 
         assert!(store.value(&path, "value").is_none());
         assert!(store.value(&path, "spinner").is_none());
+    }
+
+    #[test]
+    fn area_f_lerps_and_rounds_to_cell_area() {
+        let start = AreaF::new(0.0, 0.0, 10.0, 2.0);
+        let end = AreaF::new(10.0, 4.0, 20.0, 6.0);
+        let area = start.lerp(end, 0.5).to_area();
+
+        assert_eq!(area.x(), 5);
+        assert_eq!(area.y(), 2);
+        assert_eq!(area.width(), 15);
+        assert_eq!(area.height(), 4);
     }
 }

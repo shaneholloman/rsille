@@ -1,6 +1,6 @@
 //! Button widget — focusable interactive button
 
-use crate::animation::{AnimationCtx, AnimationSpec};
+use crate::animation::{AnimationConfig, AnimationCtx, AnimationSlot, AnimationSpec};
 use crate::event::{Event, KeyCode};
 use crate::focus::FocusConfig;
 use crate::layout::Constraints;
@@ -25,7 +25,7 @@ pub struct Button<M = ()> {
     label: String,
     variant: ButtonVariant,
     disabled: bool,
-    animation: Option<AnimationSpec>,
+    animation: Option<AnimationConfig>,
     on_click: Option<Box<dyn Fn() -> M>>,
     widget_key: Option<String>,
 }
@@ -69,12 +69,12 @@ impl<M> Button<M> {
     }
 
     pub fn animated(mut self) -> Self {
-        self.animation = Some(AnimationSpec::default());
+        self.animation = Some(AnimationConfig::Theme(AnimationSlot::Focus));
         self
     }
 
     pub fn animation(mut self, spec: AnimationSpec) -> Self {
-        self.animation = Some(spec);
+        self.animation = Some(AnimationConfig::Custom(spec));
         self
     }
 
@@ -196,7 +196,7 @@ impl<M> Widget<M> for Button<M> {
     }
 
     fn animate(&self, ctx: &mut AnimationCtx) -> bool {
-        let Some(spec) = self.animation else {
+        let Some(animation) = self.animation else {
             return false;
         };
 
@@ -205,6 +205,7 @@ impl<M> Widget<M> for Button<M> {
         } else {
             0.0
         };
+        let spec = animation.resolve(ctx.animation_theme());
         ctx.track_value("focus", target, spec)
     }
 

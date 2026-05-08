@@ -1,6 +1,9 @@
 //! Prelude — import everything you need with `use tui::prelude::*;`
 
-pub use crate::animation::{AnimationSpec, Easing};
+pub use crate::animation::{
+    AnimationConfig, AnimationSlot, AnimationSpec, AnimationTheme, AreaF, ClipMode,
+    Direction as AnimationDirection, Easing, LayoutTransition, MotionPolicy, Repeat,
+};
 pub use crate::app::{App, FrameInfo, QuitBehavior};
 pub use crate::effect::{
     CancellationToken, Effect, Request, RequestContext, RequestEvent, RequestId, RequestOutcome,

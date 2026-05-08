@@ -1,6 +1,7 @@
 //! Theme system for global styling
 
 use super::{Color, Style};
+use crate::animation::AnimationTheme;
 
 #[derive(Debug, Clone, Copy)]
 struct Palette {
@@ -301,6 +302,8 @@ pub struct Theme {
     pub name: String,
     /// Semantic style roles
     pub styles: ThemeStyles,
+    /// Theme-level animation timing defaults.
+    pub animations: AnimationTheme,
 }
 
 impl Theme {
@@ -309,7 +312,14 @@ impl Theme {
         Self {
             name: name.into(),
             styles,
+            animations: AnimationTheme::default(),
         }
+    }
+
+    /// Set theme-level animation defaults.
+    pub fn with_animations(mut self, animations: AnimationTheme) -> Self {
+        self.animations = animations;
+        self
     }
 
     /// Create the built-in dark theme
@@ -333,6 +343,7 @@ impl Theme {
 pub struct ThemeBuilder {
     name: String,
     styles: Option<ThemeStyles>,
+    animations: Option<AnimationTheme>,
 }
 
 impl ThemeBuilder {
@@ -341,6 +352,7 @@ impl ThemeBuilder {
         Self {
             name: "custom".to_string(),
             styles: None,
+            animations: None,
         }
     }
 
@@ -356,10 +368,17 @@ impl ThemeBuilder {
         self
     }
 
+    /// Set animation timing defaults.
+    pub fn animations(mut self, animations: AnimationTheme) -> Self {
+        self.animations = Some(animations);
+        self
+    }
+
     /// Build the theme, using dark theme defaults for unset fields
     pub fn build(self) -> Theme {
         let styles = self.styles.unwrap_or_else(ThemeStyles::dark);
-        Theme::new(self.name, styles)
+        let animations = self.animations.unwrap_or_default();
+        Theme::new(self.name, styles).with_animations(animations)
     }
 }
 
@@ -392,6 +411,23 @@ mod tests {
             .styles(ThemeStyles::dark())
             .build();
         assert_eq!(theme.name, "custom");
+    }
+
+    #[test]
+    fn test_theme_builder_accepts_animation_defaults() {
+        let animations = AnimationTheme {
+            fast: crate::animation::AnimationSpec::new(
+                std::time::Duration::from_millis(50),
+                crate::animation::Easing::Linear,
+            ),
+            ..AnimationTheme::default()
+        };
+        let theme = Theme::builder().animations(animations).build();
+
+        assert_eq!(
+            theme.animations.fast.duration,
+            std::time::Duration::from_millis(50)
+        );
     }
 
     #[test]
