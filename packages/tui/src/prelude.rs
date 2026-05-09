@@ -19,9 +19,9 @@ pub use crate::layout::{
     clamp_scroll_offset, col, ensure_item_visible, grid, max_scroll_offset, overlay, row,
     scroll_lines, scroll_offset_for_item, scroll_view, scrollbar, split, stack, AlignItems,
     AnchorRect, Constraints, Direction, Flex, Grid, GridLine, GridPlacement, GridTrack,
-    JustifyContent, Overlay, OverlayAnchor, OverlayLayer, OverlayPlacement, ScrollAxis,
-    ScrollState, ScrollView, Scrollbar, ScrollbarOrientation, ScrollbarVisibility, Split,
-    SplitDirection, SplitSize, SplitState, Stack,
+    HorizontalAlign, JustifyContent, Overlay, OverlayAnchor, OverlayLayer, OverlayPlacement,
+    ScrollAxis, ScrollState, ScrollView, Scrollbar, ScrollbarOrientation, ScrollbarVisibility,
+    Split, SplitDirection, SplitSize, SplitState, Stack, VerticalAlign,
 };
 pub use crate::shell::{
     CommandDescriptor, CommandRouter, Hotkey, HotkeyRegistry, ModalManager, Navigator,

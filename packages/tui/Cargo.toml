@@ -84,6 +84,10 @@ name = "file_explorer"
 path = "examples/widgets/file_explorer.rs"
 
 [[example]]
+name = "label_art"
+path = "examples/widgets/label_art.rs"
+
+[[example]]
 name = "list"
 path = "examples/widgets/list.rs"
 

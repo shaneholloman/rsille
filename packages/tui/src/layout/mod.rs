@@ -1,5 +1,6 @@
 //! Layout system for widget positioning
 
+pub mod alignment;
 pub mod border_renderer;
 pub mod constraints;
 pub mod flex;
@@ -11,6 +12,7 @@ pub mod scroll;
 pub mod split;
 pub mod taffy_bridge;
 
+pub use alignment::{HorizontalAlign, VerticalAlign};
 pub use constraints::Constraints;
 pub use flex::{col, row, Direction, Flex};
 pub use grid::{grid, Grid};

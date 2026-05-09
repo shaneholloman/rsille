@@ -24,6 +24,7 @@ cargo run -p tui --example controls
 cargo run -p tui --example animation
 cargo run -p tui --example layout_animation
 cargo run -p tui --example presence_animation
+cargo run -p tui --example label_art
 cargo run -p tui --example tree
 cargo run -p tui --example flame
 ```
