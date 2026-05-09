@@ -309,12 +309,12 @@ fn source_page(state: &State) -> impl Widget<Msg> {
 }
 
 fn signal_card(state: &State) -> impl Widget<Msg> {
-    col::<Msg>()
+    panel::<Msg>()
+        .title("Micro canvas")
         .border(BorderStyle::Rounded)
         .padding(Padding::uniform(1))
         .gap(1)
         .style(Style::default().bg(Color::Rgb(7, 13, 23)))
-        .child(label("Micro canvas").bold().fg(Color::Rgb(111, 224, 255)))
         .child(CanvasScene::new(state))
 }
 

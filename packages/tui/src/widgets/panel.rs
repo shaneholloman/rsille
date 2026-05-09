@@ -5,7 +5,8 @@ use unicode_width::UnicodeWidthChar;
 
 use crate::event::Event;
 use crate::layout::border_renderer;
-use crate::layout::Constraints;
+use crate::layout::taffy_bridge::TaffyBridge;
+use crate::layout::{Constraints, Direction};
 use crate::style::{BorderStyle, Padding, Style};
 use crate::widget::{EventCtx, IntoWidget, RenderCtx, Widget, WidgetKey};
 
@@ -178,6 +179,46 @@ pub(crate) fn render_children_vertical<M>(
         return;
     }
 
+    let mut bridge = TaffyBridge::new();
+    let child_areas =
+        match bridge.compute_layout(children, content, Direction::Vertical, gap, None, None) {
+            Ok(areas) => areas,
+            Err(_) => {
+                render_children_vertical_min_size(chunk, ctx, children, content, gap);
+                return;
+            }
+        };
+
+    for (index, (child, child_area)) in children.iter().zip(child_areas).enumerate() {
+        let child_area = Area::new(
+            (content.x(), child_area.y()).into(),
+            (content.width(), child_area.height()).into(),
+        );
+
+        if child_area.width() == 0 || child_area.height() == 0 {
+            continue;
+        }
+
+        if !child_area.intersects(&content) {
+            continue;
+        }
+
+        ctx.render_child_at(
+            chunk,
+            WidgetKey::for_child(index, child.as_ref()),
+            child.as_ref(),
+            child_area,
+        );
+    }
+}
+
+fn render_children_vertical_min_size<M>(
+    chunk: &mut render::chunk::Chunk,
+    ctx: &RenderCtx,
+    children: &[Box<dyn Widget<M>>],
+    content: Area,
+    gap: u16,
+) {
     let mut y = content.y();
     let bottom = content.y().saturating_add(content.height());
     for (index, child) in children.iter().enumerate() {
@@ -247,4 +288,101 @@ fn truncate_to_width(text: &str, max_width: usize) -> String {
 
 pub fn panel<M>() -> Panel<M> {
     Panel::new()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::animation::AnimationStore;
+    use crate::event::Event;
+    use crate::style::Theme;
+    use crate::widget::{RenderCtx, Widget, WidgetPath, WidgetStore};
+    use render::buffer::Buffer;
+    use render::chunk::Chunk;
+    use std::cell::RefCell;
+    use std::collections::HashMap;
+    use std::rc::Rc;
+
+    #[test]
+    fn panel_gives_flex_child_remaining_vertical_space() {
+        let recorded = Rc::new(RefCell::new(None));
+        let child = RecordingWidget {
+            recorded: Rc::clone(&recorded),
+            constraints: Constraints {
+                min_width: 4,
+                max_width: None,
+                min_height: 2,
+                max_height: None,
+                flex: Some(1.0),
+            },
+        };
+        let panel = panel::<()>()
+            .borderless()
+            .padding(Padding::ZERO)
+            .gap(1)
+            .child(crate::widgets::label("head"))
+            .child(child);
+
+        let mut buffer = Buffer::new((20, 8).into());
+        let area = Area::new((0, 0).into(), (20, 8).into());
+        let mut chunk = Chunk::new(&mut buffer, area).unwrap();
+        let store = WidgetStore::new();
+        let animation_store = AnimationStore::new();
+        let theme = Theme::dark();
+        let geometry = RefCell::new(HashMap::<WidgetPath, Area>::new());
+        let ctx = RenderCtx::new(&store, &animation_store, &theme, None, &geometry);
+
+        panel.render(&mut chunk, &ctx);
+
+        assert_eq!(
+            *recorded.borrow(),
+            Some(Area::new((0, 2).into(), (20, 6).into()))
+        );
+    }
+
+    #[test]
+    fn panel_still_passes_full_content_width_to_fixed_children() {
+        let recorded = Rc::new(RefCell::new(None));
+        let child = RecordingWidget {
+            recorded: Rc::clone(&recorded),
+            constraints: Constraints::fixed(4, 2),
+        };
+        let panel = panel::<()>()
+            .borderless()
+            .padding(Padding::ZERO)
+            .child(child);
+
+        let mut buffer = Buffer::new((20, 8).into());
+        let area = Area::new((0, 0).into(), (20, 8).into());
+        let mut chunk = Chunk::new(&mut buffer, area).unwrap();
+        let store = WidgetStore::new();
+        let animation_store = AnimationStore::new();
+        let theme = Theme::dark();
+        let geometry = RefCell::new(HashMap::<WidgetPath, Area>::new());
+        let ctx = RenderCtx::new(&store, &animation_store, &theme, None, &geometry);
+
+        panel.render(&mut chunk, &ctx);
+
+        assert_eq!(
+            *recorded.borrow(),
+            Some(Area::new((0, 0).into(), (20, 2).into()))
+        );
+    }
+
+    struct RecordingWidget {
+        recorded: Rc<RefCell<Option<Area>>>,
+        constraints: Constraints,
+    }
+
+    impl Widget<()> for RecordingWidget {
+        fn render(&self, chunk: &mut render::chunk::Chunk, _ctx: &RenderCtx) {
+            *self.recorded.borrow_mut() = Some(chunk.area());
+        }
+
+        fn handle_event(&self, _event: &Event, _ctx: &mut EventCtx<()>) {}
+
+        fn constraints(&self) -> Constraints {
+            self.constraints
+        }
+    }
 }
