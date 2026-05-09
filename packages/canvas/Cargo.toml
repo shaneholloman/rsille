@@ -6,7 +6,6 @@ exclude = ["examples"]
 license = "MIT"
 
 [dependencies]
-tui = { path = "../tui" }
 render = { path = "../render" }
 crossterm = { workspace = true }
 

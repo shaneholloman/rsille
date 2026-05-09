@@ -3,6 +3,7 @@
 pub mod animated;
 pub mod button;
 pub mod calendar;
+pub mod canvas;
 pub mod checkbox;
 pub mod collapsible;
 pub mod command_palette;
@@ -29,6 +30,7 @@ pub mod tree;
 pub use animated::{animate, Animated};
 pub use button::{button, Button, ButtonVariant};
 pub use calendar::{calendar, Calendar, CalendarDate, CalendarState};
+pub use canvas::{canvas, CanvasContext, CanvasWidget};
 pub use checkbox::{checkbox, Checkbox};
 pub use collapsible::{collapsible, Collapsible};
 pub use command_palette::{command_palette, CommandItem, CommandPalette, CommandPaletteState};

@@ -315,7 +315,7 @@ fn signal_card(state: &State) -> impl Widget<Msg> {
         .padding(Padding::uniform(1))
         .gap(1)
         .style(Style::default().bg(Color::Rgb(7, 13, 23)))
-        .child(CanvasScene::new(state))
+        .child(canvas_scene(state))
 }
 
 fn control_card(state: &State) -> impl Widget<Msg> {
@@ -594,40 +594,18 @@ impl CanvasScene {
     }
 }
 
-impl Widget<Msg> for CanvasScene {
-    fn render(&self, chunk: &mut rsille::render::chunk::Chunk, _ctx: &RenderCtx) {
-        let area = chunk.area();
-        if area.width() == 0 || area.height() == 0 {
-            return;
-        }
-
-        let lines = render_canvas_scene(self, area.width(), area.height());
-
-        for (row, line) in lines.into_iter().take(area.height() as usize).enumerate() {
-            let style = Style::default().fg(canvas_row_color(row)).to_render_style();
-            let display = truncate_chars(&line, area.width() as usize);
-            let _ = chunk.set_string(0, row as u16, &display, style);
-        }
-    }
-
-    fn constraints(&self) -> Constraints {
-        Constraints {
-            min_width: 34,
-            max_width: None,
-            min_height: 8,
-            max_height: None,
-            flex: Some(1.0),
-        }
-    }
-
-    fn key(&self) -> Option<&str> {
-        Some("micro-canvas")
-    }
+fn canvas_scene(state: &State) -> impl Widget<Msg> {
+    let scene = CanvasScene::new(state);
+    canvas::<Msg, _>(move |surface, ctx| draw_canvas_scene(&scene, surface, ctx))
+        .key("micro-canvas")
+        .min_size(34, 8)
 }
 
-fn render_canvas_scene(state: &CanvasScene, cell_width: u16, cell_height: u16) -> Vec<String> {
+fn draw_canvas_scene(state: &CanvasScene, surface: &mut Canvas, ctx: CanvasContext) {
+    let cell_width = ctx.cell_width();
+    let cell_height = ctx.cell_height();
     if cell_width == 0 || cell_height == 0 {
-        return Vec::new();
+        return;
     }
 
     let left_width = cell_width / 2;
@@ -636,27 +614,48 @@ fn render_canvas_scene(state: &CanvasScene, cell_width: u16, cell_height: u16) -
     let bottom_height = cell_height.saturating_sub(top_height + 1);
 
     if right_width < 4 || bottom_height < 2 {
-        return render_panel(state, cell_width, cell_height, PanelKind::Radar);
+        let mut region = SceneCanvas::new(surface, cell_height, 0, 0, cell_height);
+        draw_panel(
+            state,
+            &mut region,
+            cell_width,
+            cell_height,
+            PanelKind::Radar,
+        );
+        return;
     }
 
-    let radar = render_panel(state, left_width, top_height, PanelKind::Radar);
-    let wave = render_panel(state, right_width, top_height, PanelKind::Wave);
-    let spectrum = render_panel(state, left_width, bottom_height, PanelKind::Spectrum);
-    let portal = render_panel(state, right_width, bottom_height, PanelKind::Portal);
+    let right_x = left_width.saturating_add(1);
+    let bottom_y = top_height.saturating_add(1);
 
-    let mut lines = Vec::with_capacity(cell_height as usize);
-    for row in 0..top_height as usize {
-        lines.push(format!("{} {}", line_at(&radar, row), line_at(&wave, row)));
-    }
-    lines.push(" ".repeat(cell_width as usize));
-    for row in 0..bottom_height as usize {
-        lines.push(format!(
-            "{} {}",
-            line_at(&spectrum, row),
-            line_at(&portal, row)
-        ));
-    }
-    lines
+    draw_panel(
+        state,
+        &mut SceneCanvas::new(surface, cell_height, 0, 0, top_height),
+        left_width,
+        top_height,
+        PanelKind::Radar,
+    );
+    draw_panel(
+        state,
+        &mut SceneCanvas::new(surface, cell_height, right_x, 0, top_height),
+        right_width,
+        top_height,
+        PanelKind::Wave,
+    );
+    draw_panel(
+        state,
+        &mut SceneCanvas::new(surface, cell_height, 0, bottom_y, bottom_height),
+        left_width,
+        bottom_height,
+        PanelKind::Spectrum,
+    );
+    draw_panel(
+        state,
+        &mut SceneCanvas::new(surface, cell_height, right_x, bottom_y, bottom_height),
+        right_width,
+        bottom_height,
+        PanelKind::Portal,
+    );
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -667,22 +666,16 @@ enum PanelKind {
     Portal,
 }
 
-fn render_panel(
+fn draw_panel(
     state: &CanvasScene,
+    canvas: &mut SceneCanvas<'_>,
     cell_width: u16,
     cell_height: u16,
     kind: PanelKind,
-) -> Vec<String> {
+) {
     if cell_width == 0 || cell_height == 0 {
-        return Vec::new();
+        return;
     }
-
-    let mut canvas = Canvas::new();
-    canvas.set_bound(
-        (0, cell_width.saturating_sub(1) as i32),
-        (0, cell_height.saturating_sub(1) as i32),
-    );
-    canvas.fixed_bound(true);
 
     let dot_width = cell_width as i32 * 2;
     let dot_height = cell_height as i32 * 4;
@@ -692,23 +685,16 @@ fn render_panel(
     let cy = (dot_height - 1) as f64 / 2.0;
 
     match kind {
-        PanelKind::Radar => draw_radar(state, &mut canvas, dot_width, dot_height, cx, cy, phase),
-        PanelKind::Wave => draw_wave(state, &mut canvas, dot_width, dot_height, cy, phase),
-        PanelKind::Spectrum => draw_spectrum(state, &mut canvas, dot_width, dot_height, phase),
-        PanelKind::Portal => draw_portal(state, &mut canvas, dot_width, dot_height, cx, cy, phase),
+        PanelKind::Radar => draw_radar(state, canvas, dot_width, dot_height, cx, cy, phase),
+        PanelKind::Wave => draw_wave(state, canvas, dot_width, dot_height, cy, phase),
+        PanelKind::Spectrum => draw_spectrum(state, canvas, dot_width, dot_height, phase),
+        PanelKind::Portal => draw_portal(state, canvas, dot_width, dot_height, cx, cy, phase),
     }
-
-    let mut bytes = Vec::new();
-    let _ = canvas.print_on(&mut bytes, false);
-    String::from_utf8_lossy(&bytes)
-        .lines()
-        .map(str::to_owned)
-        .collect()
 }
 
 fn draw_radar(
     state: &CanvasScene,
-    canvas: &mut Canvas,
+    canvas: &mut SceneCanvas<'_>,
     dot_width: i32,
     dot_height: i32,
     cx: f64,
@@ -748,7 +734,7 @@ fn draw_radar(
 
 fn draw_wave(
     state: &CanvasScene,
-    canvas: &mut Canvas,
+    canvas: &mut SceneCanvas<'_>,
     dot_width: i32,
     dot_height: i32,
     cy: f64,
@@ -780,7 +766,7 @@ fn draw_wave(
 
 fn draw_portal(
     state: &CanvasScene,
-    canvas: &mut Canvas,
+    canvas: &mut SceneCanvas<'_>,
     dot_width: i32,
     dot_height: i32,
     cx: f64,
@@ -853,7 +839,7 @@ fn draw_portal(
 
 fn draw_spectrum(
     state: &CanvasScene,
-    canvas: &mut Canvas,
+    canvas: &mut SceneCanvas<'_>,
     dot_width: i32,
     dot_height: i32,
     phase: f64,
@@ -884,10 +870,6 @@ fn draw_spectrum(
     }
 }
 
-fn line_at(lines: &[String], row: usize) -> String {
-    lines.get(row).cloned().unwrap_or_default()
-}
-
 fn canvas_row_color(index: usize) -> Color {
     match index % 4 {
         0 => Color::Rgb(111, 224, 255),
@@ -897,8 +879,82 @@ fn canvas_row_color(index: usize) -> Color {
     }
 }
 
-fn truncate_chars(value: &str, max_chars: usize) -> String {
-    value.chars().take(max_chars).collect()
+struct SceneCanvas<'a> {
+    surface: &'a mut Canvas,
+    offset_x: i32,
+    offset_y: i32,
+    total_cell_height: u16,
+}
+
+impl<'a> SceneCanvas<'a> {
+    fn new(
+        surface: &'a mut Canvas,
+        total_cell_height: u16,
+        cell_x: u16,
+        cell_y: u16,
+        cell_height: u16,
+    ) -> Self {
+        let bottom_cell = total_cell_height
+            .saturating_sub(cell_y)
+            .saturating_sub(cell_height);
+        Self {
+            surface,
+            offset_x: cell_x as i32 * 2,
+            offset_y: bottom_cell as i32 * 4,
+            total_cell_height,
+        }
+    }
+
+    fn set<T>(&mut self, x: T, y: T) -> &mut Self
+    where
+        T: Into<f64> + Copy,
+    {
+        let x = x.into() + self.offset_x as f64;
+        let y = y.into() + self.offset_y as f64;
+        let row = self.row_for_dot_y(y);
+        let style = Style::default().fg(canvas_row_color(row)).to_render_style();
+        if let Some(colors) = style.colors {
+            self.surface.set_colorful(x, y, colors);
+        } else {
+            self.surface.set(x, y);
+        }
+        self
+    }
+
+    fn line(&mut self, xy1: (f64, f64), xy2: (f64, f64)) -> &mut Self {
+        let (x1, y1) = (xy1.0.round() as i32, xy1.1.round() as i32);
+        let (x2, y2) = (xy2.0.round() as i32, xy2.1.round() as i32);
+        let d = |v1, v2| {
+            if v1 <= v2 {
+                (v2 - v1, 1.0)
+            } else {
+                (v1 - v2, -1.0)
+            }
+        };
+
+        let (xdiff, xdir) = d(x1, x2);
+        let (ydiff, ydir) = d(y1, y2);
+        let r = std::cmp::max(xdiff, ydiff);
+        if r == 0 {
+            return self.set(x1, y1);
+        }
+
+        for i in 0..=r {
+            let r = r as f64;
+            let i = i as f64;
+            let x = x1 as f64 + i * xdiff as f64 / r * xdir;
+            let y = y1 as f64 + i * ydiff as f64 / r * ydir;
+            self.set(x, y);
+        }
+
+        self
+    }
+
+    fn row_for_dot_y(&self, y: f64) -> usize {
+        let tile_y = (y.round() as i32).div_euclid(4);
+        let row = self.total_cell_height as i32 - 1 - tile_y;
+        row.max(0) as usize
+    }
 }
 
 fn log_lines(state: &State) -> Vec<LogLine> {

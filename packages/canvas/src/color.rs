@@ -4,7 +4,7 @@ use crossterm::{
     queue,
     style::{Color, Colors, Print, ResetColor, SetColors},
 };
-use render::style::Stylized;
+use render::style::{Style, Stylized};
 
 use crate::braille::{Pixel, PixelOp};
 
@@ -73,6 +73,11 @@ impl Default for Colored {
 
 impl From<Colored> for Stylized {
     fn from(value: Colored) -> Self {
-        Stylized::new(value.pixel.to_char(), Default::default())
+        let style = if value.color.foreground.is_some() || value.color.background.is_some() {
+            Style::with_colors(value.color)
+        } else {
+            Style::default()
+        };
+        Stylized::new(value.pixel.to_char(), style)
     }
 }
