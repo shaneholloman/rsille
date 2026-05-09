@@ -21,8 +21,8 @@ use crate::focus::FocusManager;
 use crate::shell::{CommandRouter, Hotkey, HotkeyRegistry};
 use crate::style::Theme;
 use crate::widget::{
-    EventCtx, EventPhase, FocusRequest, HitRegion, RenderCtx, Widget, WidgetKey, WidgetPath,
-    WidgetStore,
+    EventCtx, EventPhase, FocusRequest, HitRegion, RenderCtx, Widget, WidgetId, WidgetKey,
+    WidgetPath, WidgetStore,
 };
 use crate::widgets::text_input::TextInputState;
 use crate::widgets::textarea::TextAreaState;
@@ -573,20 +573,18 @@ impl<State, U, V, M: Send + 'static> AppRuntime<State, U, V, M> {
 
     fn retain_state_for_live_and_exiting_paths(&mut self) {
         let live_paths: Vec<WidgetPath> = self.focus.live_paths().iter().cloned().collect();
+        let live_ids: Vec<WidgetId> = self.focus.live_ids().iter().cloned().collect();
         let exiting_paths = self.exiting_paths();
         let mut live_shared_ids = HashSet::new();
         if let Some(tree) = self.cached_tree.as_ref() {
             let mut path = WidgetPath::root();
             Self::collect_shared_transition_ids(tree.as_ref(), &mut path, &mut live_shared_ids);
         }
-        let should_retain = |path: &WidgetPath| {
-            live_paths.iter().any(|live| live == path)
-                || exiting_paths.iter().any(|exit| path.starts_with(exit))
-        };
-
-        self.store.retain_active(should_retain);
+        self.store
+            .retain_active(|id| live_ids.iter().any(|live| live == id));
         let mut animation_store = self.animation_store.borrow_mut();
-        animation_store.retain_active(|path| {
+        animation_store.retain_active(|id| live_ids.iter().any(|live| live == id));
+        animation_store.retain_timeline_paths(|path| {
             live_paths.iter().any(|live| live == path)
                 || exiting_paths.iter().any(|exit| path.starts_with(exit))
         });
@@ -693,14 +691,16 @@ impl<State, U, V, M: Send + 'static> AppRuntime<State, U, V, M> {
     fn build_event_route<'a>(
         tree: &'a dyn Widget<M>,
         target_path: Option<&WidgetPath>,
-    ) -> Vec<(WidgetPath, &'a dyn Widget<M>)> {
-        let mut route = vec![(WidgetPath::root(), tree)];
+    ) -> Vec<(WidgetPath, WidgetId, &'a dyn Widget<M>)> {
+        let mut route = vec![(WidgetPath::root(), WidgetId::root(), tree)];
         let Some(target_path) = target_path else {
             return route;
         };
 
         let mut current_widget = tree;
         let mut current_path = WidgetPath::root();
+        let mut current_id = WidgetId::root();
+        let mut stable_scope_id = WidgetId::root();
 
         for key in target_path.as_slice() {
             let children = current_widget.children();
@@ -717,7 +717,11 @@ impl<State, U, V, M: Send + 'static> AppRuntime<State, U, V, M> {
             };
 
             current_path.push(key.clone());
-            route.push((current_path.clone(), next_widget));
+            let (next_id, next_stable_scope_id) =
+                WidgetId::for_child(&current_id, &stable_scope_id, key);
+            current_id = next_id;
+            stable_scope_id = next_stable_scope_id;
+            route.push((current_path.clone(), current_id.clone(), next_widget));
             current_widget = next_widget;
         }
 
@@ -730,6 +734,7 @@ impl<State, U, V, M: Send + 'static> AppRuntime<State, U, V, M> {
         store: &mut WidgetStore,
         messages: &mut Vec<M>,
         path: WidgetPath,
+        id: WidgetId,
         focused_path: Option<WidgetPath>,
         geometry: &HashMap<WidgetPath, render::area::Area>,
         phase: EventPhase,
@@ -739,6 +744,7 @@ impl<State, U, V, M: Send + 'static> AppRuntime<State, U, V, M> {
             store,
             messages,
             path,
+            id,
             focused_path,
             geometry,
             phase,
@@ -790,13 +796,14 @@ impl<State, U, V, M: Send + 'static> AppRuntime<State, U, V, M> {
         let focused_snapshot = focus.current_path().cloned();
         let ancestor_len = route.len().saturating_sub(1);
 
-        for (path, widget) in route.iter().take(ancestor_len) {
+        for (path, id, widget) in route.iter().take(ancestor_len) {
             let outcome = Self::dispatch_to_widget(
                 *widget,
                 event,
                 store,
                 messages,
                 path.clone(),
+                id.clone(),
                 focused_snapshot.clone(),
                 geometry,
                 EventPhase::Capture,
@@ -809,13 +816,14 @@ impl<State, U, V, M: Send + 'static> AppRuntime<State, U, V, M> {
             }
         }
 
-        if let Some((path, widget)) = route.last() {
+        if let Some((path, id, widget)) = route.last() {
             let outcome = Self::dispatch_to_widget(
                 *widget,
                 event,
                 store,
                 messages,
                 path.clone(),
+                id.clone(),
                 focused_snapshot.clone(),
                 geometry,
                 EventPhase::Target,
@@ -828,13 +836,14 @@ impl<State, U, V, M: Send + 'static> AppRuntime<State, U, V, M> {
             }
         }
 
-        for (path, widget) in route.iter().take(ancestor_len).rev() {
+        for (path, id, widget) in route.iter().take(ancestor_len).rev() {
             let outcome = Self::dispatch_to_widget(
                 *widget,
                 event,
                 store,
                 messages,
                 path.clone(),
+                id.clone(),
                 focused_snapshot.clone(),
                 geometry,
                 EventPhase::Bubble,
@@ -853,17 +862,20 @@ impl<State, U, V, M: Send + 'static> AppRuntime<State, U, V, M> {
     fn animate_widget_tree(
         widget: &dyn Widget<M>,
         path: &mut WidgetPath,
+        id: WidgetId,
+        stable_scope_id: WidgetId,
         store: &mut AnimationStore,
-        focused_path: Option<&WidgetPath>,
+        focused_id: Option<WidgetId>,
         now: Instant,
         motion_policy: MotionPolicy,
         animation_theme: crate::animation::AnimationTheme,
     ) -> bool {
         let mut needs_render = {
-            let mut ctx = AnimationCtx::with_policy(
+            let mut ctx = AnimationCtx::with_identity(
                 store,
                 path.clone(),
-                focused_path,
+                id.clone(),
+                focused_id.clone(),
                 now,
                 motion_policy,
                 animation_theme,
@@ -872,12 +884,17 @@ impl<State, U, V, M: Send + 'static> AppRuntime<State, U, V, M> {
         };
 
         for (index, child) in widget.children().iter().enumerate() {
-            path.push(WidgetKey::for_child(index, child.as_ref()));
+            let key = WidgetKey::for_child(index, child.as_ref());
+            let (child_id, child_stable_scope_id) =
+                WidgetId::for_child(&id, &stable_scope_id, &key);
+            path.push(key);
             needs_render |= Self::animate_widget_tree(
                 child.as_ref(),
                 path,
+                child_id,
+                child_stable_scope_id,
                 store,
-                focused_path,
+                focused_id.clone(),
                 now,
                 motion_policy,
                 animation_theme,
@@ -907,7 +924,7 @@ impl<State, U, V, M: Send + 'static> AppRuntime<State, U, V, M> {
             return false;
         }
 
-        let focused_path = self.focus.current_path().cloned();
+        let focused_id = self.focus.current_id().cloned();
         let mut path = WidgetPath::root();
         let now = self.animation_now();
         let animation_theme = self.theme.animations;
@@ -916,8 +933,10 @@ impl<State, U, V, M: Send + 'static> AppRuntime<State, U, V, M> {
         let mut needs_render = Self::animate_widget_tree(
             tree.as_ref(),
             &mut path,
+            WidgetId::root(),
+            WidgetId::root(),
             &mut store,
-            focused_path.as_ref(),
+            focused_id,
             now,
             self.motion_policy,
             animation_theme,
@@ -1289,6 +1308,7 @@ where
 
         // Render
         let focused_path = self.focus.current_path();
+        let focused_id = self.focus.current_id().cloned();
         self.geometry.borrow_mut().clear();
         self.hit_regions.borrow_mut().clear();
         let ctx = RenderCtx::with_runtime(
@@ -1296,6 +1316,7 @@ where
             &self.animation_store,
             &self.theme,
             focused_path,
+            focused_id,
             &self.geometry,
             &self.hit_regions,
             render_now,

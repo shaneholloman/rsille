@@ -18,7 +18,7 @@ use crate::style::Style;
 use crate::style::Theme;
 
 // ---------------------------------------------------------------------------
-// WidgetKey & WidgetPath – stable widget identity
+// WidgetKey, WidgetPath & WidgetId
 // ---------------------------------------------------------------------------
 
 /// A single segment in a widget path.
@@ -71,9 +71,11 @@ impl fmt::Display for WidgetKey {
     }
 }
 
-/// Path from the root of the widget tree to a specific widget.
+/// Path from the root of the current widget tree to a specific widget.
 ///
-/// Each segment is a [`WidgetKey`] identifying the child at that level.
+/// Each segment is a [`WidgetKey`] identifying the child at that level. This is
+/// a frame-local address used for traversal, event routing, hit testing, and
+/// geometry. Cross-frame state should use [`WidgetId`] instead.
 /// Uses `SmallVec` to avoid heap allocation for typical tree depths (≤ 8).
 #[derive(Clone, PartialEq, Eq, Hash, Default)]
 pub struct WidgetPath(SmallVec<[WidgetKey; 8]>);
@@ -152,6 +154,98 @@ impl fmt::Display for WidgetPath {
     }
 }
 
+/// Stable widget identity used for focus, widget-local state, and animation.
+///
+/// Named widget keys act as stable anchors. A keyed descendant keeps the same
+/// identity even when intermediate unkeyed layout wrappers move or are rebuilt.
+/// Unkeyed widgets still receive positional identities scoped to the nearest
+/// named ancestor, so they preserve the existing path-like behavior.
+#[derive(Clone, PartialEq, Eq, Hash, Default)]
+pub struct WidgetId(SmallVec<[WidgetKey; 8]>);
+
+impl WidgetId {
+    pub fn root() -> Self {
+        Self(SmallVec::new())
+    }
+
+    pub fn child(&self, key: impl Into<WidgetKey>) -> Self {
+        let mut id = self.0.clone();
+        id.push(key.into());
+        Self(id)
+    }
+
+    pub fn as_slice(&self) -> &[WidgetKey] {
+        &self.0
+    }
+
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    pub fn starts_with(&self, prefix: &WidgetId) -> bool {
+        self.0.starts_with(prefix.as_slice())
+    }
+
+    pub fn from_path(path: &WidgetPath) -> Self {
+        Self(path.as_slice().iter().cloned().collect())
+    }
+
+    pub(crate) fn for_child(
+        parent_id: &WidgetId,
+        stable_scope_id: &WidgetId,
+        key: &WidgetKey,
+    ) -> (WidgetId, WidgetId) {
+        match key {
+            WidgetKey::Named(_) => {
+                let child_id = stable_scope_id.child(key.clone());
+                (child_id.clone(), child_id)
+            }
+            WidgetKey::Index(_) => (parent_id.child(key.clone()), stable_scope_id.clone()),
+        }
+    }
+}
+
+impl From<&WidgetPath> for WidgetId {
+    fn from(path: &WidgetPath) -> Self {
+        WidgetId::from_path(path)
+    }
+}
+
+impl From<&WidgetId> for WidgetId {
+    fn from(id: &WidgetId) -> Self {
+        id.clone()
+    }
+}
+
+impl fmt::Debug for WidgetId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "WidgetId[")?;
+        for (i, key) in self.0.iter().enumerate() {
+            if i > 0 {
+                write!(f, " → ")?;
+            }
+            write!(f, "{key}")?;
+        }
+        write!(f, "]")
+    }
+}
+
+impl fmt::Display for WidgetId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        for (i, key) in self.0.iter().enumerate() {
+            if i > 0 {
+                write!(f, "/")?;
+            }
+            write!(f, "{key}")?;
+        }
+        Ok(())
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Widget trait
 // ---------------------------------------------------------------------------
@@ -219,9 +313,10 @@ pub trait Widget<M> {
 
     /// Return a stable key for this widget.
     ///
-    /// When set, the framework uses this key (instead of the positional index)
-    /// to identify the widget in the tree. This makes persistent state survive
-    /// sibling reordering — useful for dynamic lists.
+    /// When set, the framework uses this key as a stable identity anchor. This
+    /// makes focus, widget-local state, and animation survive sibling reordering
+    /// and intermediate unkeyed layout wrapper changes. Keys should be unique
+    /// within the nearest keyed ancestor.
     fn key(&self) -> Option<&str> {
         None
     }
@@ -288,24 +383,24 @@ enum AnimationStoreView<'a> {
 }
 
 impl AnimationStoreView<'_> {
-    fn value(self, path: &WidgetPath, channel: &str) -> Option<f64> {
+    fn value(self, id: &WidgetId, channel: &str) -> Option<f64> {
         match self {
-            Self::ReadOnly(store) => store.value(path, channel),
-            Self::Mutable(store) => store.borrow().value(path, channel),
+            Self::ReadOnly(store) => store.value(id, channel),
+            Self::Mutable(store) => store.borrow().value(id, channel),
         }
     }
 
-    fn style(self, path: &WidgetPath, channel: &str) -> Option<Style> {
+    fn style(self, id: &WidgetId, channel: &str) -> Option<Style> {
         match self {
-            Self::ReadOnly(store) => store.style(path, channel),
-            Self::Mutable(store) => store.borrow().style(path, channel),
+            Self::ReadOnly(store) => store.style(id, channel),
+            Self::Mutable(store) => store.borrow().style(id, channel),
         }
     }
 
-    fn layout_snapshot(self, path: &WidgetPath, channel: &str) -> Option<LayoutSnapshot> {
+    fn layout_snapshot(self, id: &WidgetId, channel: &str) -> Option<LayoutSnapshot> {
         match self {
-            Self::ReadOnly(store) => store.layout_snapshot(path, channel),
-            Self::Mutable(store) => store.borrow().layout_snapshot(path, channel),
+            Self::ReadOnly(store) => store.layout_snapshot(id, channel),
+            Self::Mutable(store) => store.borrow().layout_snapshot(id, channel),
         }
     }
 
@@ -365,7 +460,10 @@ pub struct RenderCtx<'a> {
     animation_store: AnimationStoreView<'a>,
     theme: &'a Theme,
     focused_path: Option<&'a WidgetPath>,
+    focused_id: Option<WidgetId>,
     current_path: WidgetPath,
+    current_id: WidgetId,
+    stable_scope_id: WidgetId,
     geometry: &'a RefCell<HashMap<WidgetPath, Area>>,
     hit_regions: Option<&'a RefCell<Vec<HitRegion>>>,
     hit_clip: Option<Area>,
@@ -388,7 +486,10 @@ impl<'a> RenderCtx<'a> {
             animation_store: AnimationStoreView::ReadOnly(animation_store),
             theme,
             focused_path,
+            focused_id: focused_path.map(WidgetId::from_path),
             current_path: WidgetPath::root(),
+            current_id: WidgetId::root(),
+            stable_scope_id: WidgetId::root(),
             geometry,
             hit_regions: None,
             hit_clip: None,
@@ -404,6 +505,7 @@ impl<'a> RenderCtx<'a> {
         animation_store: &'a RefCell<AnimationStore>,
         theme: &'a Theme,
         focused_path: Option<&'a WidgetPath>,
+        focused_id: Option<WidgetId>,
         geometry: &'a RefCell<HashMap<WidgetPath, Area>>,
         hit_regions: &'a RefCell<Vec<HitRegion>>,
         now: std::time::Instant,
@@ -414,7 +516,10 @@ impl<'a> RenderCtx<'a> {
             animation_store: AnimationStoreView::Mutable(animation_store),
             theme,
             focused_path,
+            focused_id,
             current_path: WidgetPath::root(),
+            current_id: WidgetId::root(),
+            stable_scope_id: WidgetId::root(),
             geometry,
             hit_regions: Some(hit_regions),
             hit_clip: None,
@@ -432,8 +537,9 @@ impl<'a> RenderCtx<'a> {
 
     /// Whether the current widget has keyboard focus.
     pub fn is_focused(&self) -> bool {
-        self.focused_path
-            .map(|fp| *fp == self.current_path)
+        self.focused_id
+            .as_ref()
+            .map(|id| id == &self.current_id)
             .unwrap_or(false)
     }
 
@@ -461,18 +567,18 @@ impl<'a> RenderCtx<'a> {
     /// Read persistent state stored for this widget.
     /// Returns `None` if no state has been stored yet.
     pub fn state<T: Default + 'static>(&self) -> Option<&T> {
-        self.store.get::<T>(&self.current_path)
+        self.store.get::<T>(&self.current_id)
     }
 
     /// Read the current animation value for this widget and channel.
     pub fn animation_value(&self, channel: &str) -> Option<f64> {
-        self.animation_store.value(&self.current_path, channel)
+        self.animation_store.value(&self.current_id, channel)
     }
 
     /// Read the current layout animation snapshot for this widget and channel.
     pub fn layout_animation(&self, channel: &str) -> Option<LayoutSnapshot> {
         self.animation_store
-            .layout_snapshot(&self.current_path, channel)
+            .layout_snapshot(&self.current_id, channel)
     }
 
     /// Read the current shared layout animation snapshot by shared id.
@@ -482,7 +588,7 @@ impl<'a> RenderCtx<'a> {
 
     /// Read the current style animation value for this widget and channel.
     pub fn animation_style(&self, channel: &str) -> Option<Style> {
-        self.animation_store.style(&self.current_path, channel)
+        self.animation_store.style(&self.current_id, channel)
     }
 
     /// Track a target area and return the animated display area.
@@ -492,7 +598,7 @@ impl<'a> RenderCtx<'a> {
         };
 
         let (displayed, _) = store.borrow_mut().track_layout(
-            &self.current_path,
+            &self.current_id,
             channel,
             target,
             transition,
@@ -545,7 +651,7 @@ impl<'a> RenderCtx<'a> {
     /// This is a convenience that avoids `unwrap_or` at every call-site
     /// by falling back to a leaked static default. Use sparingly.
     pub fn state_or_default<T: Default + 'static>(&self) -> &T {
-        self.store.get::<T>(&self.current_path).unwrap_or_else(|| {
+        self.store.get::<T>(&self.current_id).unwrap_or_else(|| {
             // Safe: Default is computed once per type via OnceLock-like pattern
             // We use a thread-local to avoid leaking.
             // For rendering purposes, returning a stack reference is fine because
@@ -575,12 +681,18 @@ impl<'a> RenderCtx<'a> {
     /// automatically pick a named key when the child widget provides one,
     /// falling back to the positional index.
     pub fn child_ctx(&self, key: impl Into<WidgetKey>) -> RenderCtx<'a> {
+        let key = key.into();
+        let (current_id, stable_scope_id) =
+            WidgetId::for_child(&self.current_id, &self.stable_scope_id, &key);
         RenderCtx {
             store: self.store,
             animation_store: self.animation_store,
             theme: self.theme,
             focused_path: self.focused_path,
+            focused_id: self.focused_id.clone(),
             current_path: self.current_path.child(key),
+            current_id,
+            stable_scope_id,
             geometry: self.geometry,
             hit_regions: self.hit_regions,
             hit_clip: self.hit_clip,
@@ -596,12 +708,18 @@ impl<'a> RenderCtx<'a> {
         key: impl Into<WidgetKey>,
         target: Area,
     ) -> RenderCtx<'a> {
+        let key = key.into();
+        let (current_id, stable_scope_id) =
+            WidgetId::for_child(&self.current_id, &self.stable_scope_id, &key);
         RenderCtx {
             store: self.store,
             animation_store: self.animation_store,
             theme: self.theme,
             focused_path: self.focused_path,
+            focused_id: self.focused_id.clone(),
             current_path: self.current_path.child(key),
+            current_id,
+            stable_scope_id,
             geometry: self.geometry,
             hit_regions: self.hit_regions,
             hit_clip: self.hit_clip,
@@ -629,6 +747,7 @@ impl<'a> RenderCtx<'a> {
         target: Area,
     ) -> (Area, RenderCtx<'a>, ClipMode) {
         let path = self.current_path.child(key.clone());
+        let (id, _) = WidgetId::for_child(&self.current_id, &self.stable_scope_id, &key);
         self.geometry.borrow_mut().insert(path.clone(), target);
 
         if let Some(shared) = child.shared_transition() {
@@ -665,7 +784,7 @@ impl<'a> RenderCtx<'a> {
                     store
                         .borrow_mut()
                         .track_layout(
-                            &path,
+                            &id,
                             "layout",
                             target,
                             transition,
@@ -724,6 +843,11 @@ impl<'a> RenderCtx<'a> {
     /// The current widget path in the tree.
     pub fn path(&self) -> &WidgetPath {
         &self.current_path
+    }
+
+    /// The stable identity for the current widget.
+    pub fn id(&self) -> &WidgetId {
+        &self.current_id
     }
 
     /// Record the rendered bounds for the current widget.
@@ -835,6 +959,7 @@ pub struct EventCtx<'a, M> {
     store: &'a mut WidgetStore,
     messages: &'a mut Vec<M>,
     path: WidgetPath,
+    id: WidgetId,
     focused_path: Option<WidgetPath>,
     geometry: &'a HashMap<WidgetPath, Area>,
     phase: EventPhase,
@@ -849,6 +974,7 @@ impl<'a, M> EventCtx<'a, M> {
         store: &'a mut WidgetStore,
         messages: &'a mut Vec<M>,
         path: WidgetPath,
+        id: WidgetId,
         focused_path: Option<WidgetPath>,
         geometry: &'a HashMap<WidgetPath, Area>,
         phase: EventPhase,
@@ -858,6 +984,7 @@ impl<'a, M> EventCtx<'a, M> {
             store,
             messages,
             path,
+            id,
             focused_path,
             geometry,
             phase,
@@ -870,7 +997,7 @@ impl<'a, M> EventCtx<'a, M> {
 
     /// Get or create mutable persistent state for this widget.
     pub fn state_mut<T: Default + 'static>(&mut self) -> &mut T {
-        self.store.get_or_default::<T>(self.path.clone())
+        self.store.get_or_default::<T>(self.id.clone())
     }
 
     /// Emit a message that will be delivered to the application's `update` function.
@@ -882,6 +1009,11 @@ impl<'a, M> EventCtx<'a, M> {
     /// The current widget path in the tree.
     pub fn path(&self) -> &WidgetPath {
         &self.path
+    }
+
+    /// The stable identity for the current widget.
+    pub fn id(&self) -> &WidgetId {
+        &self.id
     }
 
     /// The globally focused path.
@@ -975,13 +1107,13 @@ impl<'a, M> EventCtx<'a, M> {
 // ---------------------------------------------------------------------------
 
 /// Stores widget-internal persistent state (cursor positions, scroll offsets, etc.)
-/// keyed by the widget's [`WidgetPath`] in the tree.
+/// keyed by a widget's stable [`WidgetId`].
 ///
 /// State survives `view()` rebuilds because the store lives in the [`AppRuntime`],
 /// not inside widget instances.
 #[derive(Default)]
 pub struct WidgetStore {
-    states: HashMap<WidgetPath, Box<dyn Any>>,
+    states: HashMap<WidgetId, Box<dyn Any>>,
 }
 
 impl WidgetStore {
@@ -989,39 +1121,41 @@ impl WidgetStore {
         Self::default()
     }
 
-    /// Read state for the given path. Returns `None` if no state is stored.
-    pub fn get<T: 'static>(&self, path: &WidgetPath) -> Option<&T> {
-        self.states.get(path)?.downcast_ref()
+    /// Read state for the given widget id. Returns `None` if no state is stored.
+    pub fn get<T: 'static>(&self, id: impl Into<WidgetId>) -> Option<&T> {
+        let id = id.into();
+        self.states.get(&id)?.downcast_ref()
     }
 
-    /// Get or insert a default state for the given path.
-    pub fn get_or_default<T: Default + 'static>(&mut self, path: WidgetPath) -> &mut T {
+    /// Get or insert a default state for the given widget id.
+    pub fn get_or_default<T: Default + 'static>(&mut self, id: impl Into<WidgetId>) -> &mut T {
+        let id = id.into();
         self.states
-            .entry(path)
+            .entry(id)
             .or_insert_with(|| Box::new(T::default()))
             .downcast_mut()
-            .expect("WidgetStore type mismatch: a different type was stored at this path")
+            .expect("WidgetStore type mismatch: a different type was stored at this widget id")
     }
 
     /// Apply a function to all states of type T. Used for frame-level resets.
     pub fn for_each_state_mut<T: 'static, F>(&mut self, mut f: F)
     where
-        F: FnMut(&WidgetPath, &mut T),
+        F: FnMut(&WidgetId, &mut T),
     {
-        for (path, state) in self.states.iter_mut() {
+        for (id, state) in self.states.iter_mut() {
             if let Some(s) = state.downcast_mut::<T>() {
-                f(path, s);
+                f(id, s);
             }
         }
     }
 
-    /// Remove entries whose paths are not in the active set.
+    /// Remove entries whose widget ids are not in the active set.
     /// Called after building the widget tree to clean up stale state.
     pub fn retain_active<F>(&mut self, mut is_active: F)
     where
-        F: FnMut(&WidgetPath) -> bool,
+        F: FnMut(&WidgetId) -> bool,
     {
-        self.states.retain(|path, _| is_active(path));
+        self.states.retain(|id, _| is_active(id));
     }
 }
 

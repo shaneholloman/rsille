@@ -47,7 +47,7 @@ impl<T> From<String> for StoreKey<T> {
 
 /// Lightweight typed store for app-level helper state.
 ///
-/// Use [`crate::widget::WidgetStore`] for widget-local state bound to widget paths,
+/// Use [`crate::widget::WidgetStore`] for widget-local state bound to widget identities,
 /// and use this store when a component or helper needs named app-level slots.
 #[derive(Default)]
 pub struct Store {

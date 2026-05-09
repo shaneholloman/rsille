@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 use render::area::{Area, Position, Size};
 
 use crate::style::Style;
-use crate::widget::WidgetPath;
+use crate::widget::{WidgetId, WidgetPath};
 
 const VALUE_EPSILON: f64 = 0.000_001;
 
@@ -700,11 +700,26 @@ struct TimelineSchedule {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct AnimationKey {
-    path: WidgetPath,
+    id: WidgetId,
     channel: String,
 }
 
 impl AnimationKey {
+    fn new(id: &WidgetId, channel: &str) -> Self {
+        Self {
+            id: id.clone(),
+            channel: channel.to_owned(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct TimelineKey {
+    path: WidgetPath,
+    channel: String,
+}
+
+impl TimelineKey {
     fn new(path: &WidgetPath, channel: &str) -> Self {
         Self {
             path: path.clone(),
@@ -1131,7 +1146,7 @@ impl PulseAnimation {
     }
 }
 
-/// Stores component animation state keyed by widget path and named channel.
+/// Stores component animation state keyed by widget identity and named channel.
 #[derive(Debug, Default)]
 pub struct AnimationStore {
     values: HashMap<AnimationKey, ValueAnimation>,
@@ -1139,7 +1154,7 @@ pub struct AnimationStore {
     styles: HashMap<AnimationKey, StyleAnimation>,
     layouts: HashMap<AnimationKey, LayoutAnimation>,
     shared_layouts: HashMap<String, SharedLayoutAnimation>,
-    timelines: HashMap<AnimationKey, TimelineAnimation>,
+    timelines: HashMap<TimelineKey, TimelineAnimation>,
 }
 
 impl AnimationStore {
@@ -1147,16 +1162,22 @@ impl AnimationStore {
         Self::default()
     }
 
-    pub fn value(&self, path: &WidgetPath, channel: &str) -> Option<f64> {
-        let key = AnimationKey::new(path, channel);
+    pub fn value(&self, id: impl Into<WidgetId>, channel: &str) -> Option<f64> {
+        let id = id.into();
+        let key = AnimationKey::new(&id, channel);
         self.values
             .get(&key)
             .map(|state| state.displayed)
             .or_else(|| self.pulses.get(&key).map(|state| state.value))
     }
 
-    pub fn layout_snapshot(&self, path: &WidgetPath, channel: &str) -> Option<LayoutSnapshot> {
-        let key = AnimationKey::new(path, channel);
+    pub fn layout_snapshot(
+        &self,
+        id: impl Into<WidgetId>,
+        channel: &str,
+    ) -> Option<LayoutSnapshot> {
+        let id = id.into();
+        let key = AnimationKey::new(&id, channel);
         self.layouts.get(&key).map(LayoutAnimation::snapshot)
     }
 
@@ -1166,8 +1187,9 @@ impl AnimationStore {
             .map(|state| state.layout.snapshot())
     }
 
-    pub fn style(&self, path: &WidgetPath, channel: &str) -> Option<Style> {
-        let key = AnimationKey::new(path, channel);
+    pub fn style(&self, id: impl Into<WidgetId>, channel: &str) -> Option<Style> {
+        let id = id.into();
+        let key = AnimationKey::new(&id, channel);
         self.styles.get(&key).map(|state| state.displayed)
     }
 
@@ -1177,7 +1199,7 @@ impl AnimationStore {
         channel: &str,
         now: Instant,
     ) -> Vec<TimelineFrame> {
-        let key = AnimationKey::new(path, channel);
+        let key = TimelineKey::new(path, channel);
         self.timelines
             .get(&key)
             .map(|state| state.frames_at(now))
@@ -1190,7 +1212,7 @@ impl AnimationStore {
         channel: &str,
         now: Instant,
     ) -> bool {
-        let key = AnimationKey::new(path, channel);
+        let key = TimelineKey::new(path, channel);
         self.timelines
             .get(&key)
             .map(|state| state.active && !state.is_complete(now))
@@ -1199,13 +1221,14 @@ impl AnimationStore {
 
     fn track_value(
         &mut self,
-        path: &WidgetPath,
+        id: impl Into<WidgetId>,
         channel: &str,
         target: f64,
         spec: AnimationSpec,
         now: Instant,
     ) -> bool {
-        let key = AnimationKey::new(path, channel);
+        let id = id.into();
+        let key = AnimationKey::new(&id, channel);
         self.values
             .entry(key)
             .or_insert_with(|| ValueAnimation::new(target, spec, now))
@@ -1214,12 +1237,13 @@ impl AnimationStore {
 
     fn pulse(
         &mut self,
-        path: &WidgetPath,
+        id: impl Into<WidgetId>,
         channel: &str,
         interval: Duration,
         now: Instant,
     ) -> bool {
-        let key = AnimationKey::new(path, channel);
+        let id = id.into();
+        let key = AnimationKey::new(&id, channel);
         self.pulses
             .entry(key)
             .or_insert_with(|| PulseAnimation::new(now))
@@ -1229,13 +1253,14 @@ impl AnimationStore {
 
     fn track_style(
         &mut self,
-        path: &WidgetPath,
+        id: impl Into<WidgetId>,
         channel: &str,
         target: Style,
         spec: AnimationSpec,
         now: Instant,
     ) -> bool {
-        let key = AnimationKey::new(path, channel);
+        let id = id.into();
+        let key = AnimationKey::new(&id, channel);
         self.styles
             .entry(key)
             .or_insert_with(|| StyleAnimation::new(target, spec, now))
@@ -1252,7 +1277,7 @@ impl AnimationStore {
         motion_policy: MotionPolicy,
     ) -> (Vec<TimelineFrame>, bool) {
         let timeline = timeline.effective(motion_policy);
-        let key = AnimationKey::new(path, channel);
+        let key = TimelineKey::new(path, channel);
         let state = self
             .timelines
             .entry(key)
@@ -1261,18 +1286,18 @@ impl AnimationStore {
         (state.frames_at(now), changed || state.active)
     }
 
-    fn remove_channel(&mut self, path: &WidgetPath, channel: &str) {
-        let key = AnimationKey::new(path, channel);
+    fn remove_channel(&mut self, id: impl Into<WidgetId>, channel: &str) {
+        let id = id.into();
+        let key = AnimationKey::new(&id, channel);
         self.values.remove(&key);
         self.pulses.remove(&key);
         self.styles.remove(&key);
         self.layouts.remove(&key);
-        self.timelines.remove(&key);
     }
 
     pub fn track_layout(
         &mut self,
-        path: &WidgetPath,
+        id: impl Into<WidgetId>,
         channel: &str,
         target: Area,
         transition: LayoutTransition,
@@ -1289,7 +1314,8 @@ impl AnimationStore {
             clip: transition.clip,
             hit_test: transition.hit_test,
         };
-        let key = AnimationKey::new(path, channel);
+        let id = id.into();
+        let key = AnimationKey::new(&id, channel);
         let state = self
             .layouts
             .entry(key)
@@ -1380,15 +1406,22 @@ impl AnimationStore {
             || !self.pulses.is_empty()
     }
 
-    /// Remove animation channels whose widget path no longer exists.
+    /// Remove animation channels whose widget id no longer exists.
     pub fn retain_active<F>(&mut self, mut is_active: F)
+    where
+        F: FnMut(&WidgetId) -> bool,
+    {
+        self.values.retain(|key, _| is_active(&key.id));
+        self.pulses.retain(|key, _| is_active(&key.id));
+        self.styles.retain(|key, _| is_active(&key.id));
+        self.layouts.retain(|key, _| is_active(&key.id));
+    }
+
+    /// Remove timeline channels whose widget path no longer exists.
+    pub fn retain_timeline_paths<F>(&mut self, mut is_active: F)
     where
         F: FnMut(&WidgetPath) -> bool,
     {
-        self.values.retain(|key, _| is_active(&key.path));
-        self.pulses.retain(|key, _| is_active(&key.path));
-        self.styles.retain(|key, _| is_active(&key.path));
-        self.layouts.retain(|key, _| is_active(&key.path));
         self.timelines.retain(|key, _| is_active(&key.path));
     }
 
@@ -1405,7 +1438,8 @@ impl AnimationStore {
 pub struct AnimationCtx<'a> {
     store: &'a mut AnimationStore,
     path: WidgetPath,
-    focused_path: Option<&'a WidgetPath>,
+    id: WidgetId,
+    focused_id: Option<WidgetId>,
     now: Instant,
     motion_policy: MotionPolicy,
     animation_theme: AnimationTheme,
@@ -1418,10 +1452,13 @@ impl<'a> AnimationCtx<'a> {
         focused_path: Option<&'a WidgetPath>,
         now: Instant,
     ) -> Self {
-        Self::with_policy(
+        let id = WidgetId::from_path(&path);
+        let focused_id = focused_path.map(WidgetId::from_path);
+        Self::with_identity(
             store,
             path,
-            focused_path,
+            id,
+            focused_id,
             now,
             MotionPolicy::default(),
             AnimationTheme::default(),
@@ -1436,10 +1473,33 @@ impl<'a> AnimationCtx<'a> {
         motion_policy: MotionPolicy,
         animation_theme: AnimationTheme,
     ) -> Self {
+        let id = WidgetId::from_path(&path);
+        let focused_id = focused_path.map(WidgetId::from_path);
+        Self::with_identity(
+            store,
+            path,
+            id,
+            focused_id,
+            now,
+            motion_policy,
+            animation_theme,
+        )
+    }
+
+    pub(crate) fn with_identity(
+        store: &'a mut AnimationStore,
+        path: WidgetPath,
+        id: WidgetId,
+        focused_id: Option<WidgetId>,
+        now: Instant,
+        motion_policy: MotionPolicy,
+        animation_theme: AnimationTheme,
+    ) -> Self {
         Self {
             store,
             path,
-            focused_path,
+            id,
+            focused_id,
             now,
             motion_policy,
             animation_theme,
@@ -1448,6 +1508,10 @@ impl<'a> AnimationCtx<'a> {
 
     pub fn path(&self) -> &WidgetPath {
         &self.path
+    }
+
+    pub fn id(&self) -> &WidgetId {
+        &self.id
     }
 
     pub fn now(&self) -> Instant {
@@ -1463,30 +1527,31 @@ impl<'a> AnimationCtx<'a> {
     }
 
     pub fn is_focused(&self) -> bool {
-        self.focused_path
-            .map(|path| path == &self.path)
+        self.focused_id
+            .as_ref()
+            .map(|id| id == &self.id)
             .unwrap_or(false)
     }
 
     pub fn track_value(&mut self, channel: &str, target: f64, spec: AnimationSpec) -> bool {
         let spec = self.motion_policy.effective_spec(spec);
         self.store
-            .track_value(&self.path, channel, target, spec, self.now)
+            .track_value(&self.id, channel, target, spec, self.now)
     }
 
     pub fn track_style(&mut self, channel: &str, target: Style, spec: AnimationSpec) -> bool {
         let spec = self.motion_policy.effective_spec(spec);
         self.store
-            .track_style(&self.path, channel, target, spec, self.now)
+            .track_style(&self.id, channel, target, spec, self.now)
     }
 
     pub fn pulse(&mut self, channel: &str, interval: Duration) -> bool {
         let Some(interval) = self.motion_policy.effective_interval(interval) else {
-            self.store.remove_channel(&self.path, channel);
+            self.store.remove_channel(&self.id, channel);
             return false;
         };
 
-        self.store.pulse(&self.path, channel, interval, self.now)
+        self.store.pulse(&self.id, channel, interval, self.now)
     }
 }
 
