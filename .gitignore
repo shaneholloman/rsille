@@ -28,7 +28,4 @@ Thumbs.db
 *.tmp
 *.swp
 
-# claude
-CLAUDE.md
-
 docs
