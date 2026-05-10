@@ -396,6 +396,7 @@ impl<State, M: Clone + std::fmt::Debug + Send + 'static> App<State, M> {
             frame_runtime: FrameRuntime::new(),
             animation_epoch: Instant::now(),
             animation_frame: 0,
+            render_frame: 0,
             motion_policy,
             inline_mode,
             inline_max_height,
@@ -480,6 +481,7 @@ struct AppRuntime<State, U, V, M> {
     frame_runtime: FrameRuntime,
     animation_epoch: Instant,
     animation_frame: u64,
+    render_frame: u64,
     motion_policy: MotionPolicy,
     inline_mode: bool,
     inline_max_height: u16,
@@ -1320,12 +1322,14 @@ where
             &self.geometry,
             &self.hit_regions,
             render_now,
+            self.render_frame,
             self.motion_policy,
         );
         tree.render(&mut chunk, &ctx);
         self.render_exiting_visuals(&mut chunk, &ctx, render_now);
         self.prune_completed_exit_visuals(render_now);
         self.retain_state_for_live_and_exiting_paths();
+        self.render_frame = self.render_frame.wrapping_add(1);
 
         // Cache tree for event handling in on_events()
         self.cached_tree = Some(tree);

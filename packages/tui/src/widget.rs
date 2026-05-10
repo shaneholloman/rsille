@@ -468,6 +468,7 @@ pub struct RenderCtx<'a> {
     hit_regions: Option<&'a RefCell<Vec<HitRegion>>>,
     hit_clip: Option<Area>,
     now: std::time::Instant,
+    frame: u64,
     motion_policy: MotionPolicy,
     layout_target: Option<Area>,
     layout_managed: bool,
@@ -494,6 +495,7 @@ impl<'a> RenderCtx<'a> {
             hit_regions: None,
             hit_clip: None,
             now: std::time::Instant::now(),
+            frame: 0,
             motion_policy: MotionPolicy::default(),
             layout_target: None,
             layout_managed: false,
@@ -509,6 +511,7 @@ impl<'a> RenderCtx<'a> {
         geometry: &'a RefCell<HashMap<WidgetPath, Area>>,
         hit_regions: &'a RefCell<Vec<HitRegion>>,
         now: std::time::Instant,
+        frame: u64,
         motion_policy: MotionPolicy,
     ) -> Self {
         Self {
@@ -524,6 +527,7 @@ impl<'a> RenderCtx<'a> {
             hit_regions: Some(hit_regions),
             hit_clip: None,
             now,
+            frame,
             motion_policy,
             layout_target: None,
             layout_managed: false,
@@ -533,6 +537,21 @@ impl<'a> RenderCtx<'a> {
     /// The theme for the current render pass.
     pub fn theme(&self) -> &Theme {
         self.theme
+    }
+
+    /// The render instant supplied by the runtime for this frame.
+    pub fn now(&self) -> std::time::Instant {
+        self.now
+    }
+
+    /// Monotonic render frame number supplied by the runtime.
+    pub fn frame(&self) -> u64 {
+        self.frame
+    }
+
+    /// The global motion policy active for this render pass.
+    pub fn motion_policy(&self) -> MotionPolicy {
+        self.motion_policy
     }
 
     /// Whether the current widget has keyboard focus.
@@ -697,6 +716,7 @@ impl<'a> RenderCtx<'a> {
             hit_regions: self.hit_regions,
             hit_clip: self.hit_clip,
             now: self.now,
+            frame: self.frame,
             motion_policy: self.motion_policy,
             layout_target: None,
             layout_managed: false,
@@ -724,6 +744,7 @@ impl<'a> RenderCtx<'a> {
             hit_regions: self.hit_regions,
             hit_clip: self.hit_clip,
             now: self.now,
+            frame: self.frame,
             motion_policy: self.motion_policy,
             layout_target: Some(target),
             layout_managed: true,

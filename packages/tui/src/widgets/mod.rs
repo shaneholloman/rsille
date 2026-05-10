@@ -63,6 +63,6 @@ pub use text_input::{text_input, TextInput, TextInputState, TextInputVariant};
 pub use textarea::{textarea, TextArea, TextAreaState, TextAreaVariant};
 pub use tree::{tree, Tree, TreeItem, TreeState};
 pub use visual::{
-    looping_visual_spec, visual, GradientDirection, GradientTarget, Visual, VisualAnchor,
-    VisualEffect,
+    looping_visual_spec, visual, CellSample, GradientDirection, GradientTarget, Visual,
+    VisualAnchor, VisualCtx, VisualEffect,
 };

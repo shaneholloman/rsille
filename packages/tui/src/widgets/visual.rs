@@ -4,7 +4,7 @@
 //! resulting terminal cells back into the target chunk with optional color and
 //! geometry transforms.
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crossterm::style::{Color as CrosstermColor, Colors};
 use render::area::Area;
@@ -12,11 +12,12 @@ use render::buffer::Buffer;
 use render::style::Stylized;
 
 use crate::animation::{
-    AnimationSpec, Direction as AnimationDirection, Repeat, Timeline, Transition, TransitionEffect,
+    AnimationSpec, Direction as AnimationDirection, MotionPolicy, Repeat, Timeline, Transition,
+    TransitionEffect,
 };
 use crate::focus::FocusConfig;
 use crate::layout::Constraints;
-use crate::style::{Color, Style};
+use crate::style::{Color, Style, Theme};
 use crate::widget::{IntoWidget, RenderCtx, Widget, WidgetKey};
 
 /// Wrap a widget with terminal-cell visual effects.
@@ -32,6 +33,9 @@ pub struct Visual<M = ()> {
     progress: Option<f64>,
     channel: String,
     widget_key: Option<String>,
+    seed: Option<u64>,
+    cell_aspect: f64,
+    effect_preset: Option<String>,
 }
 
 impl<M> std::fmt::Debug for Visual<M> {
@@ -41,6 +45,9 @@ impl<M> std::fmt::Debug for Visual<M> {
             .field("animation", &self.animation)
             .field("progress", &self.progress)
             .field("channel", &self.channel)
+            .field("seed", &self.seed)
+            .field("cell_aspect", &self.cell_aspect)
+            .field("effect_preset", &self.effect_preset)
             .finish()
     }
 }
@@ -54,6 +61,9 @@ impl<M> Visual<M> {
             progress: None,
             channel: "visual".to_owned(),
             widget_key: None,
+            seed: None,
+            cell_aspect: 1.0,
+            effect_preset: None,
         }
     }
 
@@ -116,6 +126,18 @@ impl<M> Visual<M> {
         self
     }
 
+    /// Override the stable seed used by visual sampling.
+    pub fn seed(mut self, seed: u64) -> Self {
+        self.seed = Some(seed);
+        self
+    }
+
+    /// Select a named effect preset for future theme-level effect resolution.
+    pub fn effect_preset(mut self, preset: impl Into<String>) -> Self {
+        self.effect_preset = Some(preset.into());
+        self
+    }
+
     fn resolve_progress(&self, ctx: &RenderCtx) -> f64 {
         if let Some(progress) = self.progress {
             return progress;
@@ -158,7 +180,21 @@ impl<M> Widget<M> for Visual<M> {
             return;
         };
         let progress = self.resolve_progress(ctx);
-        blit_with_effects(chunk, area, &offscreen, &self.effects, progress);
+        let seed = self
+            .seed
+            .unwrap_or_else(|| stable_seed(&self.channel, self.widget_key.as_deref()));
+        let visual_ctx = VisualCtx::new(
+            progress,
+            area,
+            ctx.now(),
+            ctx.frame(),
+            self.cell_aspect,
+            ctx.motion_policy(),
+            ctx.theme(),
+            self.effect_preset.as_deref(),
+            seed,
+        );
+        blit_with_effects(chunk, &offscreen, &self.effects, &visual_ctx);
     }
 
     fn constraints(&self) -> Constraints {
@@ -353,19 +389,99 @@ pub fn looping_visual_spec(duration: Duration) -> AnimationSpec {
         .direction(AnimationDirection::Normal)
 }
 
+/// Runtime context shared by visual effects while sampling a widget.
+#[derive(Debug, Clone, Copy)]
+pub struct VisualCtx<'a> {
+    /// Effect progress in the inclusive range `0.0..=1.0`.
+    pub progress: f64,
+    /// Logical area occupied by the wrapped widget.
+    pub area: Area,
+    /// Runtime render instant for this frame.
+    pub now: Instant,
+    /// Runtime render frame number for this frame.
+    pub frame: u64,
+    /// Terminal cell width divided by cell height. Defaults to `1.0` until
+    /// terminal-specific configuration is introduced.
+    pub cell_aspect: f64,
+    /// Global motion behavior active for this render pass.
+    pub motion_policy: MotionPolicy,
+    /// Theme active for this render pass.
+    pub theme: &'a Theme,
+    /// Optional named entry point for future theme effect presets.
+    pub effect_preset: Option<&'a str>,
+    /// Stable seed available to deterministic effects.
+    pub seed: u64,
+}
+
+impl<'a> VisualCtx<'a> {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        progress: f64,
+        area: Area,
+        now: Instant,
+        frame: u64,
+        cell_aspect: f64,
+        motion_policy: MotionPolicy,
+        theme: &'a Theme,
+        effect_preset: Option<&'a str>,
+        seed: u64,
+    ) -> Self {
+        Self {
+            progress: progress.clamp(0.0, 1.0),
+            area,
+            now,
+            frame,
+            cell_aspect: cell_aspect.max(f64::EPSILON),
+            motion_policy,
+            theme,
+            effect_preset,
+            seed,
+        }
+    }
+}
+
+/// A single sampled terminal cell in a visual effect pipeline.
+///
+/// Coordinates are local to [`VisualCtx::area`]. `source_*` identifies the
+/// child-rendered cell being sampled; `dest_*` is the current destination after
+/// geometry effects have mapped it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CellSample {
+    pub source_x: f64,
+    pub source_y: f64,
+    pub dest_x: f64,
+    pub dest_y: f64,
+    pub content: Stylized,
+    pub visible: bool,
+}
+
+impl CellSample {
+    pub fn new(source_x: u16, source_y: u16, content: Stylized) -> Self {
+        let source_x = source_x as f64;
+        let source_y = source_y as f64;
+        Self {
+            source_x,
+            source_y,
+            dest_x: source_x,
+            dest_y: source_y,
+            content,
+            visible: true,
+        }
+    }
+}
+
 fn blit_with_effects(
     chunk: &mut render::chunk::Chunk,
-    area: Area,
     source: &Buffer,
     effects: &[VisualEffect],
-    progress: f64,
+    ctx: &VisualCtx<'_>,
 ) {
     let source_width = source.size().width as usize;
 
-    for local_y in 0..area.height() {
-        let source_y = area.y().saturating_add(local_y);
-        for local_x in 0..area.width() {
-            let source_x = area.x().saturating_add(local_x);
+    for local_y in 0..ctx.area.height() {
+        let source_y = ctx.area.y().saturating_add(local_y);
+        for local_x in 0..ctx.area.width() {
+            let source_x = ctx.area.x().saturating_add(local_x);
             let index = source_y as usize * source_width + source_x as usize;
             let Some(cell) = source.content().get(index) else {
                 continue;
@@ -381,15 +497,10 @@ fn blit_with_effects(
                 continue;
             }
 
-            let mut sample = CellSample {
-                x: local_x as f64,
-                y: local_y as f64,
-                content: cell.content,
-                visible: true,
-            };
+            let mut sample = CellSample::new(local_x, local_y, cell.content);
 
             for effect in effects {
-                effect.apply(&mut sample, area, progress);
+                effect.apply(&mut sample, ctx);
                 if !sample.visible {
                     break;
                 }
@@ -399,12 +510,12 @@ fn blit_with_effects(
                 continue;
             }
 
-            let dest_x = sample.x.round() as i32;
-            let dest_y = sample.y.round() as i32;
+            let dest_x = sample.dest_x.round() as i32;
+            let dest_y = sample.dest_y.round() as i32;
             if dest_x < 0
                 || dest_y < 0
-                || dest_x >= area.width() as i32
-                || dest_y >= area.height() as i32
+                || dest_x >= ctx.area.width() as i32
+                || dest_y >= ctx.area.height() as i32
             {
                 continue;
             }
@@ -414,21 +525,13 @@ fn blit_with_effects(
     }
 }
 
-#[derive(Clone, Copy)]
-struct CellSample {
-    x: f64,
-    y: f64,
-    content: Stylized,
-    visible: bool,
-}
-
 impl VisualEffect {
-    fn apply(&self, sample: &mut CellSample, area: Area, progress: f64) {
-        let progress = progress.clamp(0.0, 1.0);
+    fn apply(&self, sample: &mut CellSample, ctx: &VisualCtx<'_>) {
+        let progress = ctx.progress;
         match *self {
             Self::Fade { from, to } => {
                 let alpha = lerp(from, to, progress).clamp(0.0, 1.0);
-                let threshold = noise(sample.x as u16, sample.y as u16, 0xFAD3);
+                let threshold = noise(sample.dest_x as u16, sample.dest_y as u16, 0xFAD3);
                 sample.visible = threshold <= alpha;
             }
             Self::Gradient {
@@ -438,7 +541,8 @@ impl VisualEffect {
                 target,
                 phase,
             } => {
-                let shifted = gradient_position(sample.x, sample.y, area, direction) + phase;
+                let shifted =
+                    gradient_position(sample.dest_x, sample.dest_y, ctx.area, direction) + phase;
                 let t = if (0.0..=1.0).contains(&shifted) {
                     shifted
                 } else {
@@ -454,36 +558,58 @@ impl VisualEffect {
                 fade,
             } => {
                 let t = ease_out_cubic(progress);
-                let jitter = hash_pair(sample.x as u16, sample.y as u16, seed);
+                let jitter = hash_pair(sample.source_x as u16, sample.source_y as u16, seed);
                 let angle = jitter.0 * std::f64::consts::TAU;
                 let force = 0.35 + jitter.1 * 0.95;
-                let lift = 0.3 + noise(sample.y as u16, sample.x as u16, seed ^ 0xBEEF) * 0.8;
-                sample.x += angle.cos() * spread_x * force * t;
-                sample.y += (angle.sin() * spread_y * force - spread_y * lift) * t;
+                let lift = 0.3
+                    + noise(
+                        sample.source_y as u16,
+                        sample.source_x as u16,
+                        seed ^ 0xBEEF,
+                    ) * 0.8;
+                sample.dest_x += angle.cos() * spread_x * force * t;
+                sample.dest_y += (angle.sin() * spread_y * force - spread_y * lift) * t;
 
                 if fade {
-                    let threshold = noise(sample.x as u16, sample.y as u16, seed ^ 0xFADE);
+                    let threshold =
+                        noise(sample.dest_x as u16, sample.dest_y as u16, seed ^ 0xFADE);
                     sample.visible = threshold > progress * 0.78;
                 }
             }
             Self::MagicLamp { anchor, squeeze } => {
-                let (anchor_x, anchor_y) = anchor.resolve(area.width(), area.height());
+                let (anchor_x, anchor_y) = anchor.resolve(ctx.area.width(), ctx.area.height());
                 let open = ease_out_cubic(progress);
                 let pull = 1.0 - open;
                 let scale = open + pull * squeeze;
-                let row = if area.height() <= 1 {
+                let row = if ctx.area.height() <= 1 {
                     0.5
                 } else {
-                    sample.y / area.height().saturating_sub(1) as f64
+                    sample.dest_y / ctx.area.height().saturating_sub(1) as f64
                 };
-                let bow =
-                    ((row - 0.5) * std::f64::consts::PI).sin() * pull * area.width() as f64 * 0.16;
+                let bow = ((row - 0.5) * std::f64::consts::PI).sin()
+                    * pull
+                    * ctx.area.width() as f64
+                    * 0.16;
 
-                sample.x = anchor_x + (sample.x - anchor_x) * scale + bow;
-                sample.y = anchor_y + (sample.y - anchor_y) * (open * open + pull * squeeze);
+                sample.dest_x = anchor_x + (sample.dest_x - anchor_x) * scale + bow;
+                sample.dest_y =
+                    anchor_y + (sample.dest_y - anchor_y) * (open * open + pull * squeeze);
             }
         }
     }
+}
+
+fn stable_seed(channel: &str, widget_key: Option<&str>) -> u64 {
+    let mut seed = 0xCBF2_9CE4_8422_2325;
+    for byte in channel
+        .bytes()
+        .chain([0])
+        .chain(widget_key.unwrap_or("").bytes())
+    {
+        seed ^= byte as u64;
+        seed = seed.wrapping_mul(0x0000_0100_0000_01B3);
+    }
+    seed
 }
 
 fn gradient_position(x: f64, y: f64, area: Area, direction: GradientDirection) -> f64 {
@@ -604,6 +730,31 @@ mod tests {
         let second = cell(&buffer, 1, 0).unwrap();
 
         assert_ne!(first.content.style.colors, second.content.style.colors);
+    }
+
+    #[test]
+    fn geometry_effect_updates_destination_not_source() {
+        let theme = Theme::dark();
+        let area = Area::new((0, 0).into(), (5, 3).into());
+        let ctx = VisualCtx::new(
+            0.0,
+            area,
+            std::time::Instant::now(),
+            7,
+            1.0,
+            MotionPolicy::default(),
+            &theme,
+            None,
+            123,
+        );
+        let mut sample = CellSample::new(0, 0, Stylized::plain('x'));
+
+        VisualEffect::magic_lamp(VisualAnchor::Bottom)
+            .squeeze(0.0)
+            .apply(&mut sample, &ctx);
+
+        assert_eq!((sample.source_x, sample.source_y), (0.0, 0.0));
+        assert_ne!((sample.dest_x, sample.dest_y), (0.0, 0.0));
     }
 
     fn render_widget(widget: &impl Widget<()>, width: u16, height: u16) -> Buffer {
