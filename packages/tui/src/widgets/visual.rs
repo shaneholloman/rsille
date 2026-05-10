@@ -21,6 +21,8 @@ use crate::offscreen::{for_each_blit_cell, render_to_offscreen, BlitOptions, Bli
 use crate::style::{Color, Style, Theme};
 use crate::widget::{IntoWidget, RenderCtx, Widget, WidgetKey};
 
+const LARGE_EFFECT_AREA_CELLS: u32 = 2_400;
+
 /// Wrap a widget with terminal-cell visual effects.
 pub fn visual<M>(child: impl IntoWidget<M>) -> Visual<M> {
     Visual::new(child)
@@ -233,7 +235,7 @@ impl<M> Widget<M> for Visual<M> {
         }) else {
             return;
         };
-        let progress = self.resolve_progress(ctx);
+        let progress = effective_progress(self.resolve_progress(ctx), ctx.motion_policy());
         let seed = self
             .seed
             .unwrap_or_else(|| stable_seed(&self.channel, self.widget_key.as_deref()));
@@ -249,7 +251,8 @@ impl<M> Widget<M> for Visual<M> {
             self.effect_preset.as_deref(),
             seed,
         );
-        blit_with_effects(chunk, &offscreen, &self.effects, &visual_ctx);
+        let effects = effective_effects(&self.effects, &visual_ctx);
+        blit_with_effects(chunk, &offscreen, &effects, &visual_ctx);
     }
 
     fn constraints(&self) -> Constraints {
@@ -292,6 +295,13 @@ pub enum VisualEffect {
     MagicLamp {
         anchor: VisualAnchor,
         squeeze: f64,
+    },
+    Sequence(Vec<VisualEffect>),
+    Parallel(Vec<VisualEffect>),
+    Stagger {
+        delay: f64,
+        mode: StaggerMode,
+        effect: Box<VisualEffect>,
     },
 }
 
@@ -340,6 +350,74 @@ impl VisualEffect {
         }
     }
 
+    /// Run child effects one after another with equal duration slices.
+    ///
+    /// Completed children are sampled at `1.0`; the active child receives its
+    /// local progress; pending children are skipped.
+    pub fn sequence(effects: Vec<VisualEffect>) -> Self {
+        Self::Sequence(effects)
+    }
+
+    /// Run child effects over the same progress range.
+    ///
+    /// Children are applied in list order. Later children see earlier geometry
+    /// and color changes; visibility remains hidden once any child hides a cell.
+    pub fn parallel(effects: Vec<VisualEffect>) -> Self {
+        Self::Parallel(effects)
+    }
+
+    /// Delay a child effect by local row.
+    pub fn stagger_rows(delay: f64, effect: VisualEffect) -> Self {
+        Self::stagger(delay, StaggerMode::Rows, effect)
+    }
+
+    /// Delay a child effect by local column.
+    pub fn stagger_cols(delay: f64, effect: VisualEffect) -> Self {
+        Self::stagger(delay, StaggerMode::Cols, effect)
+    }
+
+    /// Delay a child effect by source character index, row-major.
+    pub fn stagger_chars(delay: f64, effect: VisualEffect) -> Self {
+        Self::stagger(delay, StaggerMode::Chars, effect)
+    }
+
+    fn stagger(delay: f64, mode: StaggerMode, effect: VisualEffect) -> Self {
+        Self::Stagger {
+            delay: sanitize_delay(delay),
+            mode,
+            effect: Box::new(effect),
+        }
+    }
+
+    /// Return the reduced-motion form of this effect.
+    ///
+    /// Spatial motion is replaced with fades, while color-only effects remain
+    /// unchanged. Composition is preserved with zero stagger delay.
+    pub fn reduced(&self) -> Self {
+        match self {
+            Self::Fade { .. } | Self::Gradient { .. } => self.clone(),
+            Self::Shatter { .. } => Self::fade_out(),
+            Self::MagicLamp { .. } => Self::fade_in(),
+            Self::Sequence(effects) => Self::Sequence(
+                effects
+                    .iter()
+                    .map(VisualEffect::reduced)
+                    .collect::<Vec<_>>(),
+            ),
+            Self::Parallel(effects) => Self::Parallel(
+                effects
+                    .iter()
+                    .map(VisualEffect::reduced)
+                    .collect::<Vec<_>>(),
+            ),
+            Self::Stagger { effect, mode, .. } => Self::Stagger {
+                delay: 0.0,
+                mode: *mode,
+                effect: Box::new(effect.reduced()),
+            },
+        }
+    }
+
     pub fn with_seed(mut self, seed: u64) -> Self {
         if let Self::Shatter { seed: current, .. } = &mut self {
             *current = seed;
@@ -384,6 +462,14 @@ impl VisualEffect {
         }
         self
     }
+}
+
+/// Spatial axis used by staggered visual effects.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StaggerMode {
+    Rows,
+    Cols,
+    Chars,
 }
 
 /// Direction used by [`VisualEffect::Gradient`].
@@ -515,6 +601,18 @@ impl<'a> VisualCtx<'a> {
         let (bx, by) = self.logical_point(bx, by);
         ((ax - bx).powi(2) + (ay - by).powi(2)).sqrt()
     }
+
+    /// Whether area-sensitive effects should prefer cheaper reduced behavior.
+    pub fn is_large_area(self) -> bool {
+        self.area.width() as u32 * self.area.height() as u32 > LARGE_EFFECT_AREA_CELLS
+    }
+
+    fn with_progress(self, progress: f64) -> Self {
+        Self {
+            progress: progress.clamp(0.0, 1.0),
+            ..self
+        }
+    }
 }
 
 /// A single sampled terminal cell in a visual effect pipeline.
@@ -591,12 +689,28 @@ fn blit_with_effects(
     );
 }
 
+fn effective_effects(effects: &[VisualEffect], ctx: &VisualCtx<'_>) -> Vec<VisualEffect> {
+    if ctx.motion_policy.reduced_motion || ctx.is_large_area() {
+        effects.iter().map(VisualEffect::reduced).collect()
+    } else {
+        effects.to_vec()
+    }
+}
+
+fn effective_progress(progress: f64, motion_policy: MotionPolicy) -> f64 {
+    if motion_policy.enabled {
+        progress.clamp(0.0, 1.0)
+    } else {
+        1.0
+    }
+}
+
 impl VisualEffect {
     fn apply(&self, sample: &mut CellSample, ctx: &VisualCtx<'_>) {
         let progress = ctx.progress;
-        match *self {
+        match self {
             Self::Fade { from, to } => {
-                let alpha = lerp(from, to, progress).clamp(0.0, 1.0);
+                let alpha = lerp(*from, *to, progress).clamp(0.0, 1.0);
                 let threshold = noise(sample.dest_x as u16, sample.dest_y as u16, 0xFAD3);
                 sample.visible = threshold <= alpha;
             }
@@ -608,14 +722,14 @@ impl VisualEffect {
                 phase,
             } => {
                 let shifted =
-                    gradient_position(sample.dest_x, sample.dest_y, ctx.area, direction) + phase;
+                    gradient_position(sample.dest_x, sample.dest_y, ctx.area, *direction) + *phase;
                 let t = if (0.0..=1.0).contains(&shifted) {
                     shifted
                 } else {
                     shifted.rem_euclid(1.0)
                 };
-                let color = start.interpolate(end, t);
-                apply_color(&mut sample.content, color, target);
+                let color = start.interpolate(*end, t);
+                apply_color(&mut sample.content, color, *target);
             }
             Self::Shatter {
                 seed,
@@ -624,29 +738,29 @@ impl VisualEffect {
                 fade,
             } => {
                 let t = ease_out_cubic(progress);
-                let jitter = hash_pair(sample.source_x as u16, sample.source_y as u16, seed);
+                let jitter = hash_pair(sample.source_x as u16, sample.source_y as u16, *seed);
                 let angle = jitter.0 * std::f64::consts::TAU;
                 let force = 0.35 + jitter.1 * 0.95;
                 let lift = 0.3
                     + noise(
                         sample.source_y as u16,
                         sample.source_x as u16,
-                        seed ^ 0xBEEF,
+                        *seed ^ 0xBEEF,
                     ) * 0.8;
-                sample.dest_x += ctx.aspect_adjusted_x_offset(angle.cos() * spread_x * force * t);
-                sample.dest_y += (angle.sin() * spread_y * force - spread_y * lift) * t;
+                sample.dest_x += ctx.aspect_adjusted_x_offset(angle.cos() * *spread_x * force * t);
+                sample.dest_y += (angle.sin() * *spread_y * force - *spread_y * lift) * t;
 
-                if fade {
+                if *fade {
                     let threshold =
-                        noise(sample.dest_x as u16, sample.dest_y as u16, seed ^ 0xFADE);
-                    sample.visible = threshold > progress * 0.78;
+                        noise(sample.dest_x as u16, sample.dest_y as u16, *seed ^ 0xFADE);
+                    sample.visible = threshold > progress;
                 }
             }
             Self::MagicLamp { anchor, squeeze } => {
                 let (anchor_x, anchor_y) = anchor.resolve(ctx.area.width(), ctx.area.height());
                 let open = ease_out_cubic(progress);
                 let pull = 1.0 - open;
-                let scale = open + pull * squeeze;
+                let scale = open + pull * *squeeze;
                 let row = if ctx.area.height() <= 1 {
                     0.5
                 } else {
@@ -663,10 +777,89 @@ impl VisualEffect {
                     + ctx.aspect_adjusted_x_offset((sample.dest_x - anchor_x) * scale)
                     + bow;
                 sample.dest_y =
-                    anchor_y + (sample.dest_y - anchor_y) * (open * open + pull * squeeze);
+                    anchor_y + (sample.dest_y - anchor_y) * (open * open + pull * *squeeze);
+            }
+            Self::Sequence(effects) => {
+                apply_sequence(effects, sample, ctx);
+            }
+            Self::Parallel(effects) => {
+                for effect in effects {
+                    effect.apply(sample, ctx);
+                }
+            }
+            Self::Stagger {
+                delay,
+                mode,
+                effect,
+            } => {
+                let local_progress = staggered_progress(sample, ctx, *delay, *mode);
+                effect.apply(sample, &ctx.with_progress(local_progress));
             }
         }
     }
+}
+
+fn apply_sequence(effects: &[VisualEffect], sample: &mut CellSample, ctx: &VisualCtx<'_>) {
+    let len = effects.len();
+    if len == 0 {
+        return;
+    }
+
+    let scaled = ctx.progress.clamp(0.0, 1.0) * len as f64;
+    let active = scaled.floor().min((len - 1) as f64) as usize;
+    let local = if active == len - 1 && ctx.progress >= 1.0 {
+        1.0
+    } else {
+        scaled - active as f64
+    };
+
+    for (index, effect) in effects.iter().enumerate() {
+        if index < active {
+            effect.apply(sample, &ctx.with_progress(1.0));
+        } else if index == active {
+            effect.apply(sample, &ctx.with_progress(local));
+        } else {
+            break;
+        }
+
+        if !sample.visible {
+            break;
+        }
+    }
+}
+
+fn staggered_progress(
+    sample: &CellSample,
+    ctx: &VisualCtx<'_>,
+    delay: f64,
+    mode: StaggerMode,
+) -> f64 {
+    if delay <= 0.0 {
+        return ctx.progress;
+    }
+
+    let (index, max_index) = match mode {
+        StaggerMode::Rows => (
+            sample.source_y.round().max(0.0),
+            ctx.area.height().saturating_sub(1) as f64,
+        ),
+        StaggerMode::Cols => (
+            sample.source_x.round().max(0.0),
+            ctx.area.width().saturating_sub(1) as f64,
+        ),
+        StaggerMode::Chars => {
+            let width = ctx.area.width().max(1) as f64;
+            (
+                sample.source_y.round().max(0.0) * width + sample.source_x.round().max(0.0),
+                (ctx.area.width() as u32 * ctx.area.height() as u32).saturating_sub(1) as f64,
+            )
+        }
+    };
+
+    let max_offset = (delay * max_index).min(0.95);
+    let offset = (delay * index).min(max_offset);
+    let duration = (1.0 - max_offset).max(f64::EPSILON);
+    ((ctx.progress - offset) / duration).clamp(0.0, 1.0)
 }
 
 fn sanitize_cell_aspect(cell_aspect: f64) -> f64 {
@@ -674,6 +867,14 @@ fn sanitize_cell_aspect(cell_aspect: f64) -> f64 {
         cell_aspect.max(f64::EPSILON)
     } else {
         1.0
+    }
+}
+
+fn sanitize_delay(delay: f64) -> f64 {
+    if delay.is_finite() {
+        delay.clamp(0.0, 1.0)
+    } else {
+        0.0
     }
 }
 
@@ -924,6 +1125,165 @@ mod tests {
 
         assert_ne!(square.dest_x, narrow.dest_x);
         assert_eq!(square.dest_y, narrow.dest_y);
+    }
+
+    #[test]
+    fn disabled_motion_samples_final_visual_progress() {
+        assert_eq!(effective_progress(0.25, MotionPolicy::disabled()), 1.0);
+        assert_eq!(effective_progress(0.25, MotionPolicy::default()), 0.25);
+    }
+
+    #[test]
+    fn reduced_motion_replaces_spatial_effects_with_fades() {
+        let theme = Theme::dark();
+        let area = Area::new((0, 0).into(), (8, 2).into());
+        let ctx = VisualCtx::new(
+            0.5,
+            area,
+            std::time::Instant::now(),
+            1,
+            1.0,
+            MotionPolicy::reduced_motion(),
+            &theme,
+            None,
+            123,
+        );
+
+        let effects = effective_effects(&[VisualEffect::shatter()], &ctx);
+        assert!(matches!(
+            effects[0],
+            VisualEffect::Fade { from: 1.0, to: 0.0 }
+        ));
+
+        let mut sample = CellSample::new(3, 1, Stylized::plain('x'));
+        effects[0].apply(&mut sample, &ctx);
+
+        assert_eq!((sample.dest_x, sample.dest_y), (3.0, 1.0));
+    }
+
+    #[test]
+    fn large_areas_use_reduced_effects() {
+        let theme = Theme::dark();
+        let area = Area::new((0, 0).into(), (120, 30).into());
+        let ctx = VisualCtx::new(
+            0.5,
+            area,
+            std::time::Instant::now(),
+            1,
+            1.0,
+            MotionPolicy::default(),
+            &theme,
+            None,
+            123,
+        );
+
+        let effects = effective_effects(&[VisualEffect::magic_lamp(VisualAnchor::Bottom)], &ctx);
+        assert!(matches!(
+            effects[0],
+            VisualEffect::Fade { from: 0.0, to: 1.0 }
+        ));
+    }
+
+    #[test]
+    fn sequence_applies_completed_then_active_effects() {
+        let theme = Theme::dark();
+        let area = Area::new((0, 0).into(), (2, 1).into());
+        let early_ctx = VisualCtx::new(
+            0.25,
+            area,
+            std::time::Instant::now(),
+            1,
+            1.0,
+            MotionPolicy::default(),
+            &theme,
+            None,
+            123,
+        );
+        let late_ctx = early_ctx.with_progress(0.75);
+        let effect = VisualEffect::sequence(vec![
+            VisualEffect::gradient(
+                Color::Rgb(255, 0, 0),
+                Color::Rgb(255, 0, 0),
+                GradientDirection::Horizontal,
+            ),
+            VisualEffect::gradient(
+                Color::Rgb(0, 0, 255),
+                Color::Rgb(0, 0, 255),
+                GradientDirection::Horizontal,
+            ),
+        ]);
+        let mut early = CellSample::new(0, 0, Stylized::plain('x'));
+        let mut late = CellSample::new(0, 0, Stylized::plain('x'));
+
+        effect.apply(&mut early, &early_ctx);
+        effect.apply(&mut late, &late_ctx);
+
+        assert_ne!(early.content.style.colors, late.content.style.colors);
+    }
+
+    #[test]
+    fn parallel_applies_later_effects_last() {
+        let theme = Theme::dark();
+        let area = Area::new((0, 0).into(), (2, 1).into());
+        let ctx = VisualCtx::new(
+            1.0,
+            area,
+            std::time::Instant::now(),
+            1,
+            1.0,
+            MotionPolicy::default(),
+            &theme,
+            None,
+            123,
+        );
+        let effect = VisualEffect::parallel(vec![
+            VisualEffect::gradient(
+                Color::Rgb(255, 0, 0),
+                Color::Rgb(255, 0, 0),
+                GradientDirection::Horizontal,
+            ),
+            VisualEffect::gradient(
+                Color::Rgb(0, 0, 255),
+                Color::Rgb(0, 0, 255),
+                GradientDirection::Horizontal,
+            ),
+        ]);
+        let mut parallel = CellSample::new(0, 0, Stylized::plain('x'));
+        let mut blue = CellSample::new(0, 0, Stylized::plain('x'));
+
+        effect.apply(&mut parallel, &ctx);
+        VisualEffect::gradient(
+            Color::Rgb(0, 0, 255),
+            Color::Rgb(0, 0, 255),
+            GradientDirection::Horizontal,
+        )
+        .apply(&mut blue, &ctx);
+
+        assert_eq!(parallel.content.style.colors, blue.content.style.colors);
+    }
+
+    #[test]
+    fn stagger_rows_delays_later_rows() {
+        let theme = Theme::dark();
+        let area = Area::new((0, 0).into(), (4, 3).into());
+        let ctx = VisualCtx::new(
+            0.5,
+            area,
+            std::time::Instant::now(),
+            1,
+            1.0,
+            MotionPolicy::default(),
+            &theme,
+            None,
+            123,
+        );
+        let top = CellSample::new(0, 0, Stylized::plain('x'));
+        let bottom = CellSample::new(0, 2, Stylized::plain('x'));
+
+        assert!(
+            staggered_progress(&top, &ctx, 0.2, StaggerMode::Rows)
+                > staggered_progress(&bottom, &ctx, 0.2, StaggerMode::Rows)
+        );
     }
 
     fn render_widget(widget: &impl Widget<()>, width: u16, height: u16) -> Buffer {

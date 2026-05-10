@@ -46,8 +46,8 @@ pub use crate::widgets::{
     FileExplorerItemKind, FileExplorerState, GradientDirection, GradientTarget, Label, List,
     ListItem, ListState, LoadingIndicator, LogLevel, LogLine, LogViewer, MarkdownViewer, Menu,
     MenuItem, MenuState, Panel, ProgressBar, RadioGroup, RadioGroupState, RadioOption, Select,
-    SelectOption, SelectSearchMode, SelectState, SelectionMode, SelectionState, Spacer, Switch,
-    TabItem, TableAlign, Tabs, TabsState, TextArea, TextAreaState, TextAreaVariant, TextInput,
-    TextInputVariant, Tree, TreeItem, TreeState, Visual, VisualAnchor, VisualConfig, VisualCtx,
-    VisualEffect,
+    SelectOption, SelectSearchMode, SelectState, SelectionMode, SelectionState, Spacer,
+    StaggerMode, Switch, TabItem, TableAlign, Tabs, TabsState, TextArea, TextAreaState,
+    TextAreaVariant, TextInput, TextInputVariant, Tree, TreeItem, TreeState, Visual, VisualAnchor,
+    VisualConfig, VisualCtx, VisualEffect,
 };
