@@ -304,6 +304,8 @@ pub struct Theme {
     pub styles: ThemeStyles,
     /// Theme-level animation timing defaults.
     pub animations: AnimationTheme,
+    /// Theme-level defaults for visual post-processing effects.
+    pub effects: ThemeEffects,
 }
 
 impl Theme {
@@ -313,12 +315,19 @@ impl Theme {
             name: name.into(),
             styles,
             animations: AnimationTheme::default(),
+            effects: ThemeEffects::default(),
         }
     }
 
     /// Set theme-level animation defaults.
     pub fn with_animations(mut self, animations: AnimationTheme) -> Self {
         self.animations = animations;
+        self
+    }
+
+    /// Set theme-level visual effect defaults.
+    pub fn with_effects(mut self, effects: ThemeEffects) -> Self {
+        self.effects = effects;
         self
     }
 
@@ -344,6 +353,7 @@ pub struct ThemeBuilder {
     name: String,
     styles: Option<ThemeStyles>,
     animations: Option<AnimationTheme>,
+    effects: Option<ThemeEffects>,
 }
 
 impl ThemeBuilder {
@@ -353,6 +363,7 @@ impl ThemeBuilder {
             name: "custom".to_string(),
             styles: None,
             animations: None,
+            effects: None,
         }
     }
 
@@ -374,17 +385,58 @@ impl ThemeBuilder {
         self
     }
 
+    /// Set visual effect defaults.
+    pub fn effects(mut self, effects: ThemeEffects) -> Self {
+        self.effects = Some(effects);
+        self
+    }
+
     /// Build the theme, using dark theme defaults for unset fields
     pub fn build(self) -> Theme {
         let styles = self.styles.unwrap_or_else(ThemeStyles::dark);
         let animations = self.animations.unwrap_or_default();
-        Theme::new(self.name, styles).with_animations(animations)
+        let effects = self.effects.unwrap_or_default();
+        Theme::new(self.name, styles)
+            .with_animations(animations)
+            .with_effects(effects)
     }
 }
 
 impl Default for ThemeBuilder {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// Theme-level defaults for visual post-processing effects.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ThemeEffects {
+    /// Terminal cell width divided by height as used by geometry effects.
+    ///
+    /// The default keeps historical behavior. Applications can tune this to
+    /// match their terminal font, for example `0.5` for narrow cells.
+    pub cell_aspect: f64,
+}
+
+impl Default for ThemeEffects {
+    fn default() -> Self {
+        Self { cell_aspect: 1.0 }
+    }
+}
+
+impl ThemeEffects {
+    /// Override the terminal cell aspect used by geometry effects.
+    pub fn cell_aspect(mut self, cell_aspect: f64) -> Self {
+        self.cell_aspect = sanitize_cell_aspect(cell_aspect);
+        self
+    }
+}
+
+fn sanitize_cell_aspect(cell_aspect: f64) -> f64 {
+    if cell_aspect.is_finite() {
+        cell_aspect.max(f64::EPSILON)
+    } else {
+        1.0
     }
 }
 
@@ -428,6 +480,14 @@ mod tests {
             theme.animations.fast.duration,
             std::time::Duration::from_millis(50)
         );
+    }
+
+    #[test]
+    fn test_theme_builder_accepts_effect_defaults() {
+        let effects = ThemeEffects::default().cell_aspect(0.5);
+        let theme = Theme::builder().effects(effects).build();
+
+        assert_eq!(theme.effects.cell_aspect, 0.5);
     }
 
     #[test]

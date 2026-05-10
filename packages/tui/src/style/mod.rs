@@ -10,7 +10,7 @@ pub use border::{BorderChars, BorderStyle};
 pub use padding::Padding;
 
 pub use error::CssError;
-pub use theme::{Theme, ThemeBuilder, ThemeStyles};
+pub use theme::{Theme, ThemeBuilder, ThemeEffects, ThemeStyles};
 
 /// Widget style configuration (visual properties only)
 ///

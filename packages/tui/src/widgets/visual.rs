@@ -34,7 +34,7 @@ pub struct Visual<M = ()> {
     channel: String,
     widget_key: Option<String>,
     seed: Option<u64>,
-    cell_aspect: f64,
+    config: VisualConfig,
     effect_preset: Option<String>,
 }
 
@@ -46,10 +46,39 @@ impl<M> std::fmt::Debug for Visual<M> {
             .field("progress", &self.progress)
             .field("channel", &self.channel)
             .field("seed", &self.seed)
-            .field("cell_aspect", &self.cell_aspect)
+            .field("config", &self.config)
             .field("effect_preset", &self.effect_preset)
             .finish()
     }
+}
+
+/// Local configuration for a [`Visual`] wrapper.
+///
+/// Values set here override theme-level defaults for this single wrapper.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct VisualConfig {
+    cell_aspect: Option<f64>,
+}
+
+impl VisualConfig {
+    /// Override the terminal cell aspect used by geometry effects.
+    ///
+    /// `cell_aspect` is applied as `logical_x = cell_x * cell_aspect`.
+    /// The default `None` means "use `Theme::effects.cell_aspect`".
+    pub fn cell_aspect(mut self, cell_aspect: f64) -> Self {
+        self.cell_aspect = Some(sanitize_cell_aspect(cell_aspect));
+        self
+    }
+
+    /// Return the local cell aspect override, if one was configured.
+    pub fn cell_aspect_override(self) -> Option<f64> {
+        self.cell_aspect
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct ResolvedVisualConfig {
+    cell_aspect: f64,
 }
 
 impl<M> Visual<M> {
@@ -62,7 +91,7 @@ impl<M> Visual<M> {
             channel: "visual".to_owned(),
             widget_key: None,
             seed: None,
-            cell_aspect: 1.0,
+            config: VisualConfig::default(),
             effect_preset: None,
         }
     }
@@ -82,6 +111,26 @@ impl<M> Visual<M> {
         I: IntoIterator<Item = VisualEffect>,
     {
         self.effects.extend(effects);
+        self
+    }
+
+    /// Override visual defaults for this wrapper.
+    ///
+    /// Local config wins over theme defaults. For example:
+    ///
+    /// ```no_run
+    /// # use tui::prelude::*;
+    /// let widget = visual(label::<()>("demo"))
+    ///     .config(VisualConfig::default().cell_aspect(0.5));
+    /// ```
+    pub fn config(mut self, config: VisualConfig) -> Self {
+        self.config = config;
+        self
+    }
+
+    /// Convenience for overriding only the terminal cell aspect.
+    pub fn cell_aspect(mut self, cell_aspect: f64) -> Self {
+        self.config = self.config.cell_aspect(cell_aspect);
         self
     }
 
@@ -152,6 +201,15 @@ impl<M> Visual<M> {
         frames.last().map(|frame| frame.progress).unwrap_or(1.0)
     }
 
+    fn resolve_config(&self, theme: &Theme) -> ResolvedVisualConfig {
+        ResolvedVisualConfig {
+            cell_aspect: self
+                .config
+                .cell_aspect_override()
+                .unwrap_or(theme.effects.cell_aspect),
+        }
+    }
+
     fn render_child_to_buffer(&self, area: Area, ctx: &RenderCtx) -> Option<Buffer> {
         let mut offscreen = Buffer::new(area.real_size());
         let mut offscreen_chunk = render::chunk::Chunk::new(&mut offscreen, area).ok()?;
@@ -183,12 +241,13 @@ impl<M> Widget<M> for Visual<M> {
         let seed = self
             .seed
             .unwrap_or_else(|| stable_seed(&self.channel, self.widget_key.as_deref()));
+        let resolved_config = self.resolve_config(ctx.theme());
         let visual_ctx = VisualCtx::new(
             progress,
             area,
             ctx.now(),
             ctx.frame(),
-            self.cell_aspect,
+            resolved_config.cell_aspect,
             ctx.motion_policy(),
             ctx.theme(),
             self.effect_preset.as_deref(),
@@ -438,6 +497,28 @@ impl<'a> VisualCtx<'a> {
             seed,
         }
     }
+
+    /// Convert a cell-space x coordinate into aspect-corrected logical space.
+    pub fn logical_x(self, cell_x: f64) -> f64 {
+        cell_x * self.cell_aspect
+    }
+
+    /// Convert a cell-space point into aspect-corrected logical space.
+    pub fn logical_point(self, cell_x: f64, cell_y: f64) -> (f64, f64) {
+        (self.logical_x(cell_x), cell_y)
+    }
+
+    /// Scale a horizontal cell offset by the active cell aspect.
+    pub fn aspect_adjusted_x_offset(self, cell_dx: f64) -> f64 {
+        cell_dx * self.cell_aspect
+    }
+
+    /// Measure the logical distance between two local cell-space points.
+    pub fn logical_distance(self, ax: f64, ay: f64, bx: f64, by: f64) -> f64 {
+        let (ax, ay) = self.logical_point(ax, ay);
+        let (bx, by) = self.logical_point(bx, by);
+        ((ax - bx).powi(2) + (ay - by).powi(2)).sqrt()
+    }
 }
 
 /// A single sampled terminal cell in a visual effect pipeline.
@@ -567,7 +648,7 @@ impl VisualEffect {
                         sample.source_x as u16,
                         seed ^ 0xBEEF,
                     ) * 0.8;
-                sample.dest_x += angle.cos() * spread_x * force * t;
+                sample.dest_x += ctx.aspect_adjusted_x_offset(angle.cos() * spread_x * force * t);
                 sample.dest_y += (angle.sin() * spread_y * force - spread_y * lift) * t;
 
                 if fade {
@@ -586,16 +667,28 @@ impl VisualEffect {
                 } else {
                     sample.dest_y / ctx.area.height().saturating_sub(1) as f64
                 };
-                let bow = ((row - 0.5) * std::f64::consts::PI).sin()
-                    * pull
-                    * ctx.area.width() as f64
-                    * 0.16;
+                let bow = ctx.aspect_adjusted_x_offset(
+                    ((row - 0.5) * std::f64::consts::PI).sin()
+                        * pull
+                        * ctx.area.width() as f64
+                        * 0.16,
+                );
 
-                sample.dest_x = anchor_x + (sample.dest_x - anchor_x) * scale + bow;
+                sample.dest_x = anchor_x
+                    + ctx.aspect_adjusted_x_offset((sample.dest_x - anchor_x) * scale)
+                    + bow;
                 sample.dest_y =
                     anchor_y + (sample.dest_y - anchor_y) * (open * open + pull * squeeze);
             }
         }
+    }
+}
+
+fn sanitize_cell_aspect(cell_aspect: f64) -> f64 {
+    if cell_aspect.is_finite() {
+        cell_aspect.max(f64::EPSILON)
+    } else {
+        1.0
     }
 }
 
@@ -696,7 +789,7 @@ mod tests {
 
     use super::*;
     use crate::animation::AnimationStore;
-    use crate::style::Theme;
+    use crate::style::{Theme, ThemeEffects};
     use crate::widget::{WidgetPath, WidgetStore};
     use crate::widgets::label;
 
@@ -755,6 +848,97 @@ mod tests {
 
         assert_eq!((sample.source_x, sample.source_y), (0.0, 0.0));
         assert_ne!((sample.dest_x, sample.dest_y), (0.0, 0.0));
+    }
+
+    #[test]
+    fn visual_config_resolves_theme_default_and_local_override() {
+        let theme = Theme::dark().with_effects(ThemeEffects::default().cell_aspect(0.25));
+
+        let themed = visual(label::<()>("x"));
+        assert_eq!(themed.resolve_config(&theme).cell_aspect, 0.25);
+
+        let local = visual(label::<()>("x")).config(VisualConfig::default().cell_aspect(0.5));
+        assert_eq!(local.resolve_config(&theme).cell_aspect, 0.5);
+    }
+
+    #[test]
+    fn shatter_uses_cell_aspect_for_horizontal_offset() {
+        let theme = Theme::dark();
+        let area = Area::new((0, 0).into(), (10, 4).into());
+        let square_ctx = VisualCtx::new(
+            0.5,
+            area,
+            std::time::Instant::now(),
+            1,
+            1.0,
+            MotionPolicy::default(),
+            &theme,
+            None,
+            123,
+        );
+        let narrow_ctx = VisualCtx::new(
+            0.5,
+            area,
+            std::time::Instant::now(),
+            1,
+            0.5,
+            MotionPolicy::default(),
+            &theme,
+            None,
+            123,
+        );
+        let effect = VisualEffect::Shatter {
+            seed: 0x1234,
+            spread_x: 8.0,
+            spread_y: 0.0,
+            fade: false,
+        };
+        let mut square = CellSample::new(3, 1, Stylized::plain('x'));
+        let mut narrow = CellSample::new(3, 1, Stylized::plain('x'));
+
+        effect.apply(&mut square, &square_ctx);
+        effect.apply(&mut narrow, &narrow_ctx);
+
+        assert_ne!(square.dest_x, narrow.dest_x);
+        assert_eq!(square.dest_y, narrow.dest_y);
+        assert!((narrow.dest_x - narrow.source_x).abs() < (square.dest_x - square.source_x).abs());
+    }
+
+    #[test]
+    fn magic_lamp_uses_cell_aspect_for_horizontal_bow() {
+        let theme = Theme::dark();
+        let area = Area::new((0, 0).into(), (5, 3).into());
+        let square_ctx = VisualCtx::new(
+            0.0,
+            area,
+            std::time::Instant::now(),
+            1,
+            1.0,
+            MotionPolicy::default(),
+            &theme,
+            None,
+            123,
+        );
+        let narrow_ctx = VisualCtx::new(
+            0.0,
+            area,
+            std::time::Instant::now(),
+            1,
+            0.5,
+            MotionPolicy::default(),
+            &theme,
+            None,
+            123,
+        );
+        let effect = VisualEffect::magic_lamp(VisualAnchor::Bottom).squeeze(0.0);
+        let mut square = CellSample::new(0, 0, Stylized::plain('x'));
+        let mut narrow = CellSample::new(0, 0, Stylized::plain('x'));
+
+        effect.apply(&mut square, &square_ctx);
+        effect.apply(&mut narrow, &narrow_ctx);
+
+        assert_ne!(square.dest_x, narrow.dest_x);
+        assert_eq!(square.dest_y, narrow.dest_y);
     }
 
     fn render_widget(widget: &impl Widget<()>, width: u16, height: u16) -> Buffer {

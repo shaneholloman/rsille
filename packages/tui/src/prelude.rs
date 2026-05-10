@@ -28,7 +28,7 @@ pub use crate::shell::{
     Notification, NotificationCenter, NotificationId, NotificationLevel,
 };
 pub use crate::state::{Derived, FormState, Store, StoreKey};
-pub use crate::style::{BorderStyle, Color, Padding, Style, Theme};
+pub use crate::style::{BorderStyle, Color, Padding, Style, Theme, ThemeEffects};
 pub use crate::widget::{
     EventCtx, EventPhase, FocusRequest, IntoWidget, RenderCtx, Widget, WidgetId, WidgetKey,
     WidgetPath, WidgetStore,
@@ -48,5 +48,6 @@ pub use crate::widgets::{
     MenuItem, MenuState, Panel, ProgressBar, RadioGroup, RadioGroupState, RadioOption, Select,
     SelectOption, SelectSearchMode, SelectState, SelectionMode, SelectionState, Spacer, Switch,
     TabItem, TableAlign, Tabs, TabsState, TextArea, TextAreaState, TextAreaVariant, TextInput,
-    TextInputVariant, Tree, TreeItem, TreeState, Visual, VisualAnchor, VisualCtx, VisualEffect,
+    TextInputVariant, Tree, TreeItem, TreeState, Visual, VisualAnchor, VisualConfig, VisualCtx,
+    VisualEffect,
 };
