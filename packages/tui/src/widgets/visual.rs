@@ -12,13 +12,13 @@ use render::buffer::Buffer;
 use render::style::Stylized;
 
 use crate::animation::{
-    AnimationSpec, Direction as AnimationDirection, MotionPolicy, Repeat, Timeline, Transition,
-    TransitionEffect,
+    AnimationSpec, Direction as AnimationDirection, Easing, InitialAnimation, MotionPolicy,
+    Presence, Repeat, Timeline, Transition, TransitionEffect,
 };
 use crate::focus::FocusConfig;
 use crate::layout::Constraints;
 use crate::offscreen::{for_each_blit_cell, render_to_offscreen, BlitOptions, BlitRegion};
-use crate::style::{Color, Style, Theme};
+use crate::style::{Color, EffectSlot, Style, Theme};
 use crate::widget::{IntoWidget, RenderCtx, Widget, WidgetKey};
 
 const LARGE_EFFECT_AREA_CELLS: u32 = 2_400;
@@ -39,6 +39,9 @@ pub struct Visual<M = ()> {
     seed: Option<u64>,
     config: VisualConfig,
     effect_preset: Option<String>,
+    presence: Presence,
+    enter_effect: Option<LifecycleVisualEffect>,
+    exit_effect: Option<LifecycleVisualEffect>,
 }
 
 impl<M> std::fmt::Debug for Visual<M> {
@@ -51,7 +54,25 @@ impl<M> std::fmt::Debug for Visual<M> {
             .field("seed", &self.seed)
             .field("config", &self.config)
             .field("effect_preset", &self.effect_preset)
+            .field("presence", &self.presence)
+            .field("enter_effect", &self.enter_effect)
+            .field("exit_effect", &self.exit_effect)
             .finish()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+enum LifecycleVisualEffect {
+    Effect(VisualEffect),
+    Theme(EffectSlot),
+}
+
+impl LifecycleVisualEffect {
+    fn resolve(&self, theme: &Theme) -> VisualEffect {
+        match self {
+            Self::Effect(effect) => effect.clone(),
+            Self::Theme(slot) => theme.effects.get(*slot),
+        }
     }
 }
 
@@ -96,6 +117,9 @@ impl<M> Visual<M> {
             seed: None,
             config: VisualConfig::default(),
             effect_preset: None,
+            presence: Presence::default(),
+            enter_effect: None,
+            exit_effect: None,
         }
     }
 
@@ -210,6 +234,36 @@ impl<M> Visual<M> {
         self
     }
 
+    /// Play a visual effect automatically when this widget first appears.
+    pub fn enter(mut self, effect: VisualEffect) -> Self {
+        self.enter_effect = Some(LifecycleVisualEffect::Effect(effect));
+        self.presence = self.presence.enter(visual_enter_timeline());
+        self.presence.initial = InitialAnimation::Play;
+        self
+    }
+
+    /// Play a visual effect automatically after this widget leaves the tree.
+    pub fn exit(mut self, effect: VisualEffect) -> Self {
+        self.exit_effect = Some(LifecycleVisualEffect::Effect(effect));
+        self.presence = self.presence.exit(visual_exit_timeline());
+        self
+    }
+
+    /// Resolve the enter effect from the active theme during rendering.
+    pub fn enter_theme(mut self, slot: EffectSlot) -> Self {
+        self.enter_effect = Some(LifecycleVisualEffect::Theme(slot));
+        self.presence = self.presence.enter(visual_enter_timeline());
+        self.presence.initial = InitialAnimation::Play;
+        self
+    }
+
+    /// Resolve the exit effect from the active theme during rendering.
+    pub fn exit_theme(mut self, slot: EffectSlot) -> Self {
+        self.exit_effect = Some(LifecycleVisualEffect::Theme(slot));
+        self.presence = self.presence.exit(visual_exit_timeline());
+        self
+    }
+
     fn resolve_progress(&self, ctx: &RenderCtx) -> f64 {
         if let Some(progress) = self.progress {
             return progress;
@@ -232,6 +286,72 @@ impl<M> Visual<M> {
                 .unwrap_or(theme.effects.cell_aspect),
         }
     }
+
+    fn has_visual_work(&self) -> bool {
+        !self.effects.is_empty()
+            || self.animation.is_some()
+            || self.progress.is_some()
+            || self.enter_effect.is_some()
+            || self.exit_effect.is_some()
+    }
+
+    fn lifecycle_frames(
+        &self,
+        ctx: &RenderCtx,
+        channel: &str,
+    ) -> Vec<crate::animation::TimelineFrame> {
+        let timeline = match channel {
+            "exit" => self.presence.exit.clone(),
+            _ => self.presence.enter.clone(),
+        };
+        let Some(timeline) = timeline else {
+            return Vec::new();
+        };
+        ctx.track_timeline(channel, timeline, false)
+    }
+
+    fn resolve_effect_groups(&self, ctx: &RenderCtx) -> Vec<ResolvedEffectGroup> {
+        if ctx.is_exit_render() {
+            let Some(effect) = self
+                .exit_effect
+                .as_ref()
+                .map(|effect| effect.resolve(ctx.theme()))
+            else {
+                return Vec::new();
+            };
+            return vec![ResolvedEffectGroup {
+                progress: lifecycle_progress(&self.lifecycle_frames(ctx, "exit"), 1.0),
+                effects: vec![effect],
+            }];
+        }
+
+        let mut groups = Vec::new();
+        if !self.effects.is_empty() || self.animation.is_some() || self.progress.is_some() {
+            groups.push(ResolvedEffectGroup {
+                progress: self.resolve_progress(ctx),
+                effects: self.effects.clone(),
+            });
+        }
+
+        if let Some(effect) = self
+            .enter_effect
+            .as_ref()
+            .map(|effect| effect.resolve(ctx.theme()))
+        {
+            groups.push(ResolvedEffectGroup {
+                progress: lifecycle_progress(&self.lifecycle_frames(ctx, "enter"), 1.0),
+                effects: vec![effect],
+            });
+        }
+
+        groups
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct ResolvedEffectGroup {
+    progress: f64,
+    effects: Vec<VisualEffect>,
 }
 
 impl<M> Widget<M> for Visual<M> {
@@ -243,7 +363,7 @@ impl<M> Widget<M> for Visual<M> {
 
         ctx.record_bounds(area);
 
-        if self.effects.is_empty() && self.animation.is_none() && self.progress.is_none() {
+        if !self.has_visual_work() {
             let child_ctx = ctx.child_ctx(WidgetKey::for_child(0, self.child.as_ref()));
             self.child.render(chunk, &child_ctx);
             return;
@@ -255,13 +375,12 @@ impl<M> Widget<M> for Visual<M> {
         }) else {
             return;
         };
-        let progress = effective_progress(self.resolve_progress(ctx), ctx.motion_policy());
         let seed = self
             .seed
             .unwrap_or_else(|| stable_seed(&self.channel, self.widget_key.as_deref()));
         let resolved_config = self.resolve_config(ctx.theme());
         let visual_ctx = VisualCtx::new(
-            progress,
+            1.0,
             area,
             ctx.now(),
             ctx.frame(),
@@ -271,8 +390,12 @@ impl<M> Widget<M> for Visual<M> {
             self.effect_preset.as_deref(),
             seed,
         );
-        let effects = effective_effects(&self.effects, &visual_ctx);
-        blit_with_effects(chunk, &offscreen, &effects, &visual_ctx);
+        let effect_groups = self.resolve_effect_groups(ctx);
+        if effect_groups.iter().all(|group| group.effects.is_empty()) {
+            blit_with_effects(chunk, &offscreen, &[], &visual_ctx);
+            return;
+        }
+        blit_with_effect_groups(chunk, &offscreen, &effect_groups, &visual_ctx);
     }
 
     fn constraints(&self) -> Constraints {
@@ -289,6 +412,14 @@ impl<M> Widget<M> for Visual<M> {
 
     fn key(&self) -> Option<&str> {
         self.widget_key.as_deref()
+    }
+
+    fn presence(&self) -> Option<&Presence> {
+        if self.presence.enter.is_some() || self.presence.exit.is_some() {
+            Some(&self.presence)
+        } else {
+            None
+        }
     }
 }
 
@@ -704,6 +835,20 @@ pub fn looping_visual_spec(duration: Duration) -> AnimationSpec {
         .direction(AnimationDirection::Normal)
 }
 
+fn visual_enter_timeline() -> Timeline {
+    Timeline::single(Transition::new(
+        TransitionEffect::Fade,
+        AnimationSpec::new(Duration::from_millis(180), Easing::EaseOut),
+    ))
+}
+
+fn visual_exit_timeline() -> Timeline {
+    Timeline::single(Transition::new(
+        TransitionEffect::Fade,
+        AnimationSpec::new(Duration::from_millis(140), Easing::EaseIn),
+    ))
+}
+
 /// Runtime context shared by visual effects while sampling a widget.
 #[derive(Debug, Clone, Copy)]
 pub struct VisualCtx<'a> {
@@ -861,6 +1006,73 @@ fn blit_with_effects(
             }
         },
     );
+}
+
+fn blit_with_effect_groups(
+    chunk: &mut render::chunk::Chunk,
+    source: &Buffer,
+    groups: &[ResolvedEffectGroup],
+    ctx: &VisualCtx<'_>,
+) {
+    let effective_groups: Vec<(VisualCtx<'_>, Vec<VisualEffect>)> = groups
+        .iter()
+        .map(|group| {
+            let group_ctx =
+                ctx.with_progress(effective_progress(group.progress, ctx.motion_policy));
+            let effects = effective_effects(&group.effects, &group_ctx);
+            (group_ctx, effects)
+        })
+        .collect();
+    let region = BlitRegion::new(
+        ctx.area.x() as usize,
+        ctx.area.y() as usize,
+        0,
+        0,
+        ctx.area.width() as usize,
+        ctx.area.height() as usize,
+    );
+
+    for_each_blit_cell(
+        source,
+        region,
+        Some(ctx.area.size()),
+        BlitOptions::default().skip_blank(),
+        |cell| {
+            let mut sample = CellSample::new(cell.dest_x, cell.dest_y, cell.content);
+
+            for (group_ctx, effects) in &effective_groups {
+                for effect in effects {
+                    effect.apply(&mut sample, group_ctx);
+                    if !sample.visible {
+                        break;
+                    }
+                }
+
+                if !sample.visible {
+                    break;
+                }
+            }
+
+            let dest_x = sample.dest_x.round() as i32;
+            let dest_y = sample.dest_y.round() as i32;
+            if sample.visible
+                && dest_x >= 0
+                && dest_y >= 0
+                && dest_x < ctx.area.width() as i32
+                && dest_y < ctx.area.height() as i32
+            {
+                let _ = chunk.set_forced(dest_x as u16, dest_y as u16, sample.content);
+            }
+        },
+    );
+}
+
+fn lifecycle_progress(frames: &[crate::animation::TimelineFrame], fallback: f64) -> f64 {
+    frames
+        .last()
+        .map(|frame| frame.progress)
+        .unwrap_or(fallback)
+        .clamp(0.0, 1.0)
 }
 
 fn effective_effects(effects: &[VisualEffect], ctx: &VisualCtx<'_>) -> Vec<VisualEffect> {
@@ -1433,6 +1645,43 @@ mod tests {
 
         let local = visual(label::<()>("x")).config(VisualConfig::default().cell_aspect(0.5));
         assert_eq!(local.resolve_config(&theme).cell_aspect, 0.5);
+    }
+
+    #[test]
+    fn visual_enter_exit_declare_presence() {
+        let widget = visual(label::<()>("x"))
+            .enter(VisualEffect::fade_in())
+            .exit(VisualEffect::fade_out());
+        let presence = widget.presence().unwrap();
+
+        assert!(presence.enter.is_some());
+        assert!(presence.exit.is_some());
+        assert_eq!(presence.initial, InitialAnimation::Play);
+    }
+
+    #[test]
+    fn visual_theme_slots_declare_presence_and_resolve_late() {
+        let widget = visual(label::<()>("x"))
+            .enter_theme(EffectSlot::ToastEnter)
+            .exit_theme(EffectSlot::ToastExit);
+
+        assert!(matches!(
+            widget.enter_effect,
+            Some(LifecycleVisualEffect::Theme(EffectSlot::ToastEnter))
+        ));
+        assert!(matches!(
+            widget.exit_effect,
+            Some(LifecycleVisualEffect::Theme(EffectSlot::ToastExit))
+        ));
+        assert!(widget.presence().unwrap().enter.is_some());
+        assert_eq!(
+            widget
+                .enter_effect
+                .as_ref()
+                .unwrap()
+                .resolve(&Theme::dark()),
+            ThemeEffects::default().toast_enter
+        );
     }
 
     #[test]

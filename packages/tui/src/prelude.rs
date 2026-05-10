@@ -28,7 +28,7 @@ pub use crate::shell::{
     Notification, NotificationCenter, NotificationId, NotificationLevel,
 };
 pub use crate::state::{Derived, FormState, Store, StoreKey};
-pub use crate::style::{BorderStyle, Color, Padding, Style, Theme, ThemeEffects};
+pub use crate::style::{BorderStyle, Color, EffectSlot, Padding, Style, Theme, ThemeEffects};
 pub use crate::widget::{
     EventCtx, EventPhase, FocusRequest, IntoWidget, RenderCtx, Widget, WidgetId, WidgetKey,
     WidgetPath, WidgetStore,

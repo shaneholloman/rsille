@@ -2,6 +2,7 @@
 
 use super::{Color, Style};
 use crate::animation::AnimationTheme;
+use crate::widgets::visual::{GradientDirection, VisualAnchor, VisualEffect, WipeDirection};
 
 #[derive(Debug, Clone, Copy)]
 struct Palette {
@@ -409,18 +410,51 @@ impl Default for ThemeBuilder {
 }
 
 /// Theme-level defaults for visual post-processing effects.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ThemeEffects {
     /// Terminal cell width divided by height as used by geometry effects.
     ///
     /// The default keeps historical behavior. Applications can tune this to
     /// match their terminal font, for example `0.5` for narrow cells.
     pub cell_aspect: f64,
+    /// Default visual effect for modal/dialog entry.
+    pub modal_enter: VisualEffect,
+    /// Default visual effect for modal/dialog exit.
+    pub modal_exit: VisualEffect,
+    /// Default visual effect for toast/notification entry.
+    pub toast_enter: VisualEffect,
+    /// Default visual effect for toast/notification exit.
+    pub toast_exit: VisualEffect,
+    /// Default visual effect for focus emphasis.
+    pub focus_pulse: VisualEffect,
+    /// Default visual effect for full-screen or route transitions.
+    pub screen_transition: VisualEffect,
 }
 
 impl Default for ThemeEffects {
     fn default() -> Self {
-        Self { cell_aspect: 1.0 }
+        Self {
+            cell_aspect: 1.0,
+            modal_enter: VisualEffect::parallel(vec![
+                VisualEffect::fade_in(),
+                VisualEffect::magic_lamp(VisualAnchor::Center).squeeze(0.18),
+            ]),
+            modal_exit: VisualEffect::parallel(vec![
+                VisualEffect::fade_out(),
+                VisualEffect::magic_lamp(VisualAnchor::Center).squeeze(0.18),
+            ]),
+            toast_enter: VisualEffect::stagger_rows(
+                0.04,
+                VisualEffect::reveal(WipeDirection::LeftToRight).softness(0.08),
+            ),
+            toast_exit: VisualEffect::dissolve_out(),
+            focus_pulse: VisualEffect::gradient(
+                Color::Rgb(125, 211, 252),
+                Color::Rgb(244, 114, 182),
+                GradientDirection::Horizontal,
+            ),
+            screen_transition: VisualEffect::reveal(WipeDirection::TopToBottom).softness(0.05),
+        }
     }
 }
 
@@ -430,6 +464,65 @@ impl ThemeEffects {
         self.cell_aspect = sanitize_cell_aspect(cell_aspect);
         self
     }
+
+    /// Override the modal enter preset.
+    pub fn modal_enter(mut self, effect: VisualEffect) -> Self {
+        self.modal_enter = effect;
+        self
+    }
+
+    /// Override the modal exit preset.
+    pub fn modal_exit(mut self, effect: VisualEffect) -> Self {
+        self.modal_exit = effect;
+        self
+    }
+
+    /// Override the toast enter preset.
+    pub fn toast_enter(mut self, effect: VisualEffect) -> Self {
+        self.toast_enter = effect;
+        self
+    }
+
+    /// Override the toast exit preset.
+    pub fn toast_exit(mut self, effect: VisualEffect) -> Self {
+        self.toast_exit = effect;
+        self
+    }
+
+    /// Override the focus pulse preset.
+    pub fn focus_pulse(mut self, effect: VisualEffect) -> Self {
+        self.focus_pulse = effect;
+        self
+    }
+
+    /// Override the screen transition preset.
+    pub fn screen_transition(mut self, effect: VisualEffect) -> Self {
+        self.screen_transition = effect;
+        self
+    }
+
+    /// Resolve a named theme effect slot at render time.
+    pub fn get(&self, slot: EffectSlot) -> VisualEffect {
+        match slot {
+            EffectSlot::ModalEnter => self.modal_enter.clone(),
+            EffectSlot::ModalExit => self.modal_exit.clone(),
+            EffectSlot::ToastEnter => self.toast_enter.clone(),
+            EffectSlot::ToastExit => self.toast_exit.clone(),
+            EffectSlot::FocusPulse => self.focus_pulse.clone(),
+            EffectSlot::ScreenTransition => self.screen_transition.clone(),
+        }
+    }
+}
+
+/// Named visual effect presets supplied by [`ThemeEffects`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum EffectSlot {
+    ModalEnter,
+    ModalExit,
+    ToastEnter,
+    ToastExit,
+    FocusPulse,
+    ScreenTransition,
 }
 
 fn sanitize_cell_aspect(cell_aspect: f64) -> f64 {
@@ -488,6 +581,31 @@ mod tests {
         let theme = Theme::builder().effects(effects).build();
 
         assert_eq!(theme.effects.cell_aspect, 0.5);
+    }
+
+    #[test]
+    fn test_theme_effect_slots_have_defaults() {
+        let effects = ThemeEffects::default();
+
+        assert_eq!(effects.get(EffectSlot::ModalEnter), effects.modal_enter);
+        assert_eq!(effects.get(EffectSlot::ModalExit), effects.modal_exit);
+        assert_eq!(effects.get(EffectSlot::ToastEnter), effects.toast_enter);
+        assert_eq!(effects.get(EffectSlot::ToastExit), effects.toast_exit);
+        assert_eq!(effects.get(EffectSlot::FocusPulse), effects.focus_pulse);
+        assert_eq!(
+            effects.get(EffectSlot::ScreenTransition),
+            effects.screen_transition
+        );
+    }
+
+    #[test]
+    fn test_theme_effect_slots_are_overridable() {
+        let effects =
+            ThemeEffects::default().modal_enter(crate::widgets::visual::VisualEffect::reveal(
+                crate::widgets::visual::WipeDirection::CenterOut,
+            ));
+
+        assert_eq!(effects.get(EffectSlot::ModalEnter), effects.modal_enter);
     }
 
     #[test]

@@ -11,8 +11,8 @@
 5. [x] [Task 05: 效果组合器与 stagger](./tui-visual-effects-task-05-composition-stagger.md)
 6. [x] [Task 06: 内置效果库扩展](./tui-visual-effects-task-06-built-in-effects.md)
 7. [x] [Task 07: 示例与视觉回归场景](./tui-visual-effects-task-07-examples.md)
-8. [Task 08: Visual enter / exit 生命周期 API](./tui-visual-effects-task-08-enter-exit-lifecycle.md)
-9. [Task 09: Theme effect preset](./tui-visual-effects-task-09-theme-presets.md)
+8. [x] [Task 08: Visual enter / exit 生命周期 API](./tui-visual-effects-task-08-enter-exit-lifecycle.md)
+9. [x] [Task 09: Theme effect preset](./tui-visual-effects-task-09-theme-presets.md)
 10. [Task 10: 性能优化与大区域降级](./tui-visual-effects-task-10-performance.md)
 11. [Task 11: 用户自定义 effect 与 profiling hooks](./tui-visual-effects-task-11-custom-effects-profiling.md)
 

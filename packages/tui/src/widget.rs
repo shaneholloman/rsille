@@ -472,6 +472,7 @@ pub struct RenderCtx<'a> {
     motion_policy: MotionPolicy,
     layout_target: Option<Area>,
     layout_managed: bool,
+    exit_render: bool,
 }
 
 impl<'a> RenderCtx<'a> {
@@ -499,6 +500,7 @@ impl<'a> RenderCtx<'a> {
             motion_policy: MotionPolicy::default(),
             layout_target: None,
             layout_managed: false,
+            exit_render: false,
         }
     }
 
@@ -531,6 +533,7 @@ impl<'a> RenderCtx<'a> {
             motion_policy,
             layout_target: None,
             layout_managed: false,
+            exit_render: false,
         }
     }
 
@@ -552,6 +555,11 @@ impl<'a> RenderCtx<'a> {
     /// The global motion policy active for this render pass.
     pub fn motion_policy(&self) -> MotionPolicy {
         self.motion_policy
+    }
+
+    /// Whether this render pass is drawing a retained exiting subtree.
+    pub fn is_exit_render(&self) -> bool {
+        self.exit_render
     }
 
     /// Whether the current widget has keyboard focus.
@@ -720,6 +728,7 @@ impl<'a> RenderCtx<'a> {
             motion_policy: self.motion_policy,
             layout_target: None,
             layout_managed: false,
+            exit_render: self.exit_render,
         }
     }
 
@@ -748,6 +757,33 @@ impl<'a> RenderCtx<'a> {
             motion_policy: self.motion_policy,
             layout_target: Some(target),
             layout_managed: true,
+            exit_render: self.exit_render,
+        }
+    }
+
+    pub(crate) fn exit_render_ctx<'b>(
+        &'b self,
+        geometry: &'b RefCell<HashMap<WidgetPath, Area>>,
+        hit_regions: &'b RefCell<Vec<HitRegion>>,
+    ) -> RenderCtx<'b> {
+        RenderCtx {
+            store: self.store,
+            animation_store: self.animation_store,
+            theme: self.theme,
+            focused_path: self.focused_path,
+            focused_id: self.focused_id.clone(),
+            current_path: self.current_path.clone(),
+            current_id: self.current_id.clone(),
+            stable_scope_id: self.stable_scope_id.clone(),
+            geometry,
+            hit_regions: Some(hit_regions),
+            hit_clip: self.hit_clip,
+            now: self.now,
+            frame: self.frame,
+            motion_policy: self.motion_policy,
+            layout_target: self.layout_target,
+            layout_managed: self.layout_managed,
+            exit_render: true,
         }
     }
 

@@ -34,27 +34,33 @@ fn view(state: &State) -> impl Widget<Msg> {
         .padding(Padding::uniform(1))
         .gap(2)
         .child(
-            command_palette::<Msg>()
-                .key("commands")
-                .height(12)
-                .title("Workspace Commands")
-                .prompt(">")
-                .items([
-                    CommandItem::new("open-file", "Open file").keywords(["file", "finder", "jump"]),
-                    CommandItem::new("new-terminal", "New terminal")
-                        .keywords(["shell", "console", "spawn"]),
-                    CommandItem::new("toggle-preview", "Toggle preview panel")
-                        .keywords(["preview", "panel", "layout"]),
-                    CommandItem::new("deploy-preview", "Deploy preview")
-                        .keywords(["vercel", "preview", "ship"]),
-                    CommandItem::new("sync-schema", "Sync schema")
-                        .keywords(["database", "migrate", "db"]),
-                    CommandItem::new("open-settings", "Open settings")
-                        .keywords(["preferences", "config"]),
-                ])
-                .on_change(Msg::Highlighted)
-                .on_submit(Msg::Run)
-                .on_close(|| Msg::Close),
+            visual(
+                command_palette::<Msg>()
+                    .key("commands")
+                    .height(12)
+                    .title("Workspace Commands")
+                    .prompt(">")
+                    .items([
+                        CommandItem::new("open-file", "Open file")
+                            .keywords(["file", "finder", "jump"]),
+                        CommandItem::new("new-terminal", "New terminal")
+                            .keywords(["shell", "console", "spawn"]),
+                        CommandItem::new("toggle-preview", "Toggle preview panel")
+                            .keywords(["preview", "panel", "layout"]),
+                        CommandItem::new("deploy-preview", "Deploy preview")
+                            .keywords(["vercel", "preview", "ship"]),
+                        CommandItem::new("sync-schema", "Sync schema")
+                            .keywords(["database", "migrate", "db"]),
+                        CommandItem::new("open-settings", "Open settings")
+                            .keywords(["preferences", "config"]),
+                    ])
+                    .on_change(Msg::Highlighted)
+                    .on_submit(Msg::Run)
+                    .on_close(|| Msg::Close),
+            )
+            .key("commands-visual")
+            .enter_theme(EffectSlot::ModalEnter)
+            .exit_theme(EffectSlot::ModalExit),
         )
         .child(
             col::<Msg>()

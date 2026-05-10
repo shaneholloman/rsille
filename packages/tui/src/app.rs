@@ -948,6 +948,10 @@ impl<State, U, V, M: Send + 'static> AppRuntime<State, U, V, M> {
     }
 
     fn render_exiting_visuals(&self, chunk: &mut Chunk, ctx: &RenderCtx, now: Instant) {
+        let exit_geometry = RefCell::new(HashMap::new());
+        let exit_hit_regions = RefCell::new(Vec::new());
+        let exit_ctx = ctx.exit_render_ctx(&exit_geometry, &exit_hit_regions);
+
         for visual in &self.exiting_visuals {
             for node in &visual.nodes {
                 let frames = self
@@ -964,7 +968,7 @@ impl<State, U, V, M: Send + 'static> AppRuntime<State, U, V, M> {
                     visual.root.as_ref(),
                     node.path.as_slice(),
                     chunk,
-                    ctx,
+                    &exit_ctx,
                     display_area,
                 );
             }
