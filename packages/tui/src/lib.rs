@@ -5,6 +5,7 @@ pub mod error;
 pub mod event;
 pub mod focus;
 pub mod layout;
+pub(crate) mod offscreen;
 pub mod shell;
 pub mod state;
 pub mod style;

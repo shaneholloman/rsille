@@ -17,6 +17,7 @@ use crate::animation::{
 };
 use crate::focus::FocusConfig;
 use crate::layout::Constraints;
+use crate::offscreen::{for_each_blit_cell, render_to_offscreen, BlitOptions, BlitRegion};
 use crate::style::{Color, Style, Theme};
 use crate::widget::{IntoWidget, RenderCtx, Widget, WidgetKey};
 
@@ -209,14 +210,6 @@ impl<M> Visual<M> {
                 .unwrap_or(theme.effects.cell_aspect),
         }
     }
-
-    fn render_child_to_buffer(&self, area: Area, ctx: &RenderCtx) -> Option<Buffer> {
-        let mut offscreen = Buffer::new(area.real_size());
-        let mut offscreen_chunk = render::chunk::Chunk::new(&mut offscreen, area).ok()?;
-        let child_ctx = ctx.child_ctx(WidgetKey::for_child(0, self.child.as_ref()));
-        self.child.render(&mut offscreen_chunk, &child_ctx);
-        Some(offscreen)
-    }
 }
 
 impl<M> Widget<M> for Visual<M> {
@@ -234,7 +227,10 @@ impl<M> Widget<M> for Visual<M> {
             return;
         }
 
-        let Some(offscreen) = self.render_child_to_buffer(area, ctx) else {
+        let child_ctx = ctx.child_ctx(WidgetKey::for_child(0, self.child.as_ref()));
+        let Some(offscreen) = render_to_offscreen(area, |offscreen_chunk| {
+            self.child.render(offscreen_chunk, &child_ctx);
+        }) else {
             return;
         };
         let progress = self.resolve_progress(ctx);
@@ -557,28 +553,22 @@ fn blit_with_effects(
     effects: &[VisualEffect],
     ctx: &VisualCtx<'_>,
 ) {
-    let source_width = source.size().width as usize;
+    let region = BlitRegion::new(
+        ctx.area.x() as usize,
+        ctx.area.y() as usize,
+        0,
+        0,
+        ctx.area.width() as usize,
+        ctx.area.height() as usize,
+    );
 
-    for local_y in 0..ctx.area.height() {
-        let source_y = ctx.area.y().saturating_add(local_y);
-        for local_x in 0..ctx.area.width() {
-            let source_x = ctx.area.x().saturating_add(local_x);
-            let index = source_y as usize * source_width + source_x as usize;
-            let Some(cell) = source.content().get(index) else {
-                continue;
-            };
-            if cell.is_occupied {
-                continue;
-            }
-
-            let Some(ch) = cell.content.c else {
-                continue;
-            };
-            if ch == ' ' && !cell.content.has_color() && !cell.content.has_attr() {
-                continue;
-            }
-
-            let mut sample = CellSample::new(local_x, local_y, cell.content);
+    for_each_blit_cell(
+        source,
+        region,
+        Some(ctx.area.size()),
+        BlitOptions::default().skip_blank(),
+        |cell| {
+            let mut sample = CellSample::new(cell.dest_x, cell.dest_y, cell.content);
 
             for effect in effects {
                 effect.apply(&mut sample, ctx);
@@ -587,23 +577,18 @@ fn blit_with_effects(
                 }
             }
 
-            if !sample.visible {
-                continue;
-            }
-
             let dest_x = sample.dest_x.round() as i32;
             let dest_y = sample.dest_y.round() as i32;
-            if dest_x < 0
-                || dest_y < 0
-                || dest_x >= ctx.area.width() as i32
-                || dest_y >= ctx.area.height() as i32
+            if sample.visible
+                && dest_x >= 0
+                && dest_y >= 0
+                && dest_x < ctx.area.width() as i32
+                && dest_y < ctx.area.height() as i32
             {
-                continue;
+                let _ = chunk.set_forced(dest_x as u16, dest_y as u16, sample.content);
             }
-
-            let _ = chunk.set_forced(dest_x as u16, dest_y as u16, sample.content);
-        }
-    }
+        },
+    );
 }
 
 impl VisualEffect {

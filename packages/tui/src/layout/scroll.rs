@@ -1,13 +1,13 @@
 //! Scroll containers and reusable scroll helpers.
 
 use render::area::Area;
-use render::buffer::Buffer;
 use unicode_width::UnicodeWidthStr;
 
 use super::border_renderer::{render_background, render_border};
 use crate::event::{Event, KeyCode, MouseEventKind};
 use crate::focus::FocusConfig;
 use crate::layout::Constraints;
+use crate::offscreen::{blit_region, render_to_offscreen, BlitOptions, BlitRegion};
 use crate::style::{BorderStyle, Padding, Style};
 use crate::widget::{EventCtx, EventPhase, IntoWidget, RenderCtx, Widget, WidgetKey};
 
@@ -513,40 +513,24 @@ impl<M> ScrollView<M> {
         &self,
         target: &mut render::chunk::Chunk,
         viewport: Area,
-        source: &Buffer,
+        source: &render::buffer::Buffer,
         offset_x: usize,
         offset_y: usize,
     ) {
-        let source_width = source.size().width as usize;
-
-        for viewport_y in 0..viewport.height() as usize {
-            let source_y = offset_y + viewport_y;
-            if source_y >= source.size().height as usize {
-                break;
-            }
-
-            for viewport_x in 0..viewport.width() as usize {
-                let source_x = offset_x + viewport_x;
-                if source_x >= source_width {
-                    break;
-                }
-
-                let index = source_y * source_width + source_x;
-                let Some(cell) = source.content().get(index) else {
-                    continue;
-                };
-
-                if cell.is_occupied {
-                    continue;
-                }
-
-                let _ = target.set_forced(
-                    viewport.x() + viewport_x as u16,
-                    viewport.y() + viewport_y as u16,
-                    cell.content,
-                );
-            }
-        }
+        let target_area = target.area();
+        blit_region(
+            target,
+            source,
+            BlitRegion::new(
+                offset_x,
+                offset_y,
+                viewport.x() as i32 - target_area.x() as i32,
+                viewport.y() as i32 - target_area.y() as i32,
+                viewport.width() as usize,
+                viewport.height() as usize,
+            ),
+            BlitOptions::default(),
+        );
     }
 }
 
@@ -595,23 +579,15 @@ impl<M> Widget<M> for ScrollView<M> {
             metrics.content_height.min(u16::MAX as usize) as u16,
         )
             .into();
-        let mut offscreen = Buffer::new(
-            (
-                metrics.content_width.min(u16::MAX as usize) as u16,
-                metrics.content_height.min(u16::MAX as usize) as u16,
-            )
-                .into(),
-        );
-        let mut offscreen_chunk = match render::chunk::Chunk::new(
-            &mut offscreen,
-            Area::new((0, 0).into(), offscreen_size),
-        ) {
-            Ok(chunk) => chunk,
-            Err(_) => return,
-        };
-
         let child_ctx = ctx.child_ctx(WidgetKey::for_child(0, self.child.as_ref()));
-        self.child.render(&mut offscreen_chunk, &child_ctx);
+        let Some(offscreen) = render_to_offscreen(
+            Area::new((0, 0).into(), offscreen_size),
+            |offscreen_chunk| {
+                self.child.render(offscreen_chunk, &child_ctx);
+            },
+        ) else {
+            return;
+        };
         self.copy_visible_region(
             chunk,
             metrics.viewport,
