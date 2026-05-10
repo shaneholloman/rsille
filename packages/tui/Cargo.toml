@@ -72,6 +72,10 @@ name = "presence_animation"
 path = "examples/widgets/presence_animation.rs"
 
 [[example]]
+name = "visual_effects"
+path = "examples/widgets/visual_effects.rs"
+
+[[example]]
 name = "content_viewers"
 path = "examples/widgets/content_viewers.rs"
 

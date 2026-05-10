@@ -26,6 +26,7 @@ pub mod tabs;
 pub mod text_input;
 pub mod textarea;
 pub mod tree;
+pub mod visual;
 
 pub use animated::{animate, Animated};
 pub use button::{button, Button, ButtonVariant};
@@ -61,3 +62,7 @@ pub use tabs::{tabs, TabItem, Tabs, TabsState};
 pub use text_input::{text_input, TextInput, TextInputState, TextInputVariant};
 pub use textarea::{textarea, TextArea, TextAreaState, TextAreaVariant};
 pub use tree::{tree, Tree, TreeItem, TreeState};
+pub use visual::{
+    looping_visual_spec, visual, GradientDirection, GradientTarget, Visual, VisualAnchor,
+    VisualEffect,
+};
