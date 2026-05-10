@@ -1,7 +1,13 @@
-//! Visual post-processing effects.
+//! Visual post-processing effects regression stage.
 //!
 //! Run with: `cargo run -p tui --example visual_effects`
 //! Use Tab to focus buttons. Enter/Space switches the active effect.
+//!
+//! Regression coverage:
+//! - compact stage: small text areas should not drift or overflow.
+//! - wide stage: large areas exercise the automatic reduced-effect path.
+//! - policy preview: normal, reduced, and disabled variants are shown without
+//!   requiring a manual global configuration change.
 
 use tui::prelude::*;
 
@@ -18,7 +24,46 @@ struct State {
     mode_elapsed: f64,
 }
 
-const MODES: [&str; 4] = ["Fade", "Gradient", "Shatter", "Magic lamp"];
+#[derive(Debug, Clone, Copy)]
+struct Mode {
+    name: &'static str,
+    risk: &'static str,
+}
+
+const MODES: [Mode; 8] = [
+    Mode {
+        name: "Fade",
+        risk: "opacity mask",
+    },
+    Mode {
+        name: "Gradient",
+        risk: "color sweep",
+    },
+    Mode {
+        name: "Shatter",
+        risk: "cell aspect",
+    },
+    Mode {
+        name: "Magic lamp",
+        risk: "anchor mapping",
+    },
+    Mode {
+        name: "Wipe",
+        risk: "stagger reveal",
+    },
+    Mode {
+        name: "Dissolve",
+        risk: "stable noise",
+    },
+    Mode {
+        name: "Wave",
+        risk: "row offset",
+    },
+    Mode {
+        name: "Glitch",
+        risk: "seeded jitter",
+    },
+];
 
 fn main() -> WidgetResult<()> {
     App::new(State {
@@ -52,20 +97,15 @@ fn next_mode(state: &mut State) {
 
 fn effect_duration(mode: usize) -> f64 {
     match mode {
-        0 => 4.0,
-        1 => 5.0,
+        1 | 6 | 7 => 4.8,
         2 => 2.4,
-        _ => 4.6,
+        3 => 4.2,
+        _ => 3.4,
     }
 }
 
 fn mode_duration(mode: usize) -> f64 {
-    match mode {
-        0 => 5.0,
-        1 => 6.0,
-        2 => 2.4,
-        _ => 5.6,
-    }
+    effect_duration(mode) + 1.0
 }
 
 fn view(state: &State) -> impl Widget<Msg> {
@@ -78,28 +118,83 @@ fn view(state: &State) -> impl Widget<Msg> {
                 .gap(2)
                 .child(button("Next effect").on_click(|| Msg::Next).animated())
                 .child(label(format!(
-                    "{:<10} {:>3}%",
-                    MODES[state.mode],
-                    (state.progress * 100.0).round() as u8
+                    "{:<11} {:>3}%  {}",
+                    MODES[state.mode].name,
+                    (state.progress * 100.0).round() as u8,
+                    MODES[state.mode].risk
                 ))),
         )
         .child(divider())
         .child(
-            split(effect_stage(state), inspector(state))
-                .first_size(48)
-                .min_first(36)
-                .min_second(24)
-                .resizable(false),
+            split(
+                panel::<Msg>()
+                    .title("Stages")
+                    .padding(Padding::uniform(1))
+                    .gap(1)
+                    .child(compact_stage(state))
+                    .child(wide_stage(state)),
+                policy_preview(state),
+            )
+            .first_size(62)
+            .min_first(42)
+            .min_second(28)
+            .resizable(false),
         )
 }
 
-fn effect_stage(state: &State) -> Visual<Msg> {
-    let base = panel::<Msg>()
-        .title("Effect Stage")
+// Small stage keeps content deliberately dense to catch text clipping and
+// geometry effects that move cells outside tight bounds.
+fn compact_stage(state: &State) -> Visual<Msg> {
+    visual(stage_body("Compact", state, false))
+        .progress(stage_progress(state.mode, state.progress))
+        .seed(0xC0FF_EE)
+        .effect(stage_effect(state.mode, state.progress))
+}
+
+// Wide stage uses more rows and columns so the visual wrapper can hit its
+// area-sensitive downgrade path on large terminals.
+fn wide_stage(state: &State) -> Visual<Msg> {
+    visual(stage_body("Wide downgrade", state, true))
+        .progress(stage_progress(state.mode, state.progress))
+        .seed(0xFACE_FEED)
+        .effect(stage_effect(state.mode, state.progress))
+}
+
+// This is a local visual comparison: reduced uses each effect's reduced form,
+// disabled jumps the original effect to final progress. It keeps the example
+// self-contained.
+fn policy_preview(state: &State) -> impl Widget<Msg> {
+    let effect = stage_effect(state.mode, state.progress);
+
+    panel::<Msg>()
+        .title("Motion Policy Preview")
+        .padding(Padding::uniform(1))
+        .gap(1)
+        .child(policy_stage("Normal", state.progress, effect.clone()))
+        .child(policy_stage("Reduced", state.progress, effect.reduced()))
+        .child(policy_stage("Disabled", 1.0, effect))
+        .child(divider())
+        .child(label("normal / reduced / disabled"))
+}
+
+fn policy_stage(name: &'static str, progress: f64, effect: VisualEffect) -> Visual<Msg> {
+    let body = panel::<Msg>()
+        .title(name)
+        .padding(Padding::uniform(1))
+        .gap(1)
+        .child(label("deploy rsille-tui").fg(Color::Cyan).bold())
+        .child(label("api edge jobs"));
+
+    visual(body).progress(progress).seed(77).effect(effect)
+}
+
+fn stage_body(title: &'static str, state: &State, wide: bool) -> impl Widget<Msg> {
+    let mut body = panel::<Msg>()
+        .title(title)
         .padding(Padding::uniform(1))
         .gap(1)
         .child(label("Release train").fg(Color::Cyan).bold())
-        .child(label("canary/us-east"))
+        .child(label(format!("mode: {}", MODES[state.mode].name)))
         .child(progress_bar::<Msg>(state.progress).animated())
         .child(
             row::<Msg>()
@@ -109,41 +204,53 @@ fn effect_stage(state: &State) -> Visual<Msg> {
                 .child(label("jobs").fg(Color::Magenta)),
         );
 
-    match state.mode {
-        0 => visual(base)
-            .progress(state.progress)
-            .effect(VisualEffect::fade_in()),
-        1 => visual(base).progress(1.0).effect(
-            VisualEffect::gradient(
-                Color::Rgb(56, 189, 248),
-                Color::Rgb(244, 114, 182),
-                GradientDirection::Diagonal,
-            )
-            .phase(state.progress),
-        ),
-        2 => visual(base)
-            .progress(state.progress)
-            .effect(VisualEffect::shatter().with_seed(42).with_spread(24.0, 8.0)),
-        _ => visual(base)
-            .progress(state.progress)
-            .effect(VisualEffect::magic_lamp(VisualAnchor::Bottom).squeeze(0.04)),
+    if wide {
+        body = body
+            .child(label("us-east  ready   eu-west  canary   ap-south queued"))
+            .child(label("cache    warm    stream   live     workers  24/24"))
+            .child(label(
+                "alerts   none    budget   ok       latency  p95 48ms",
+            ));
+    }
+
+    body
+}
+
+fn stage_progress(mode: usize, progress: f64) -> f64 {
+    match mode {
+        1 => 1.0,
+        _ => progress,
     }
 }
 
-fn inspector(state: &State) -> impl Widget<Msg> {
-    panel::<Msg>()
-        .title("Timing")
-        .padding(Padding::uniform(1))
-        .gap(1)
-        .child(label(format!("Mode: {}", MODES[state.mode])))
-        .child(label(format!(
-            "Motion: {:.1}s",
-            effect_duration(state.mode)
-        )))
-        .child(label(format!(
-            "Hold: {:.1}s",
-            mode_duration(state.mode) - effect_duration(state.mode)
-        )))
-        .child(divider())
-        .child(label("Viewport: compact"))
+fn stage_effect(mode: usize, progress: f64) -> VisualEffect {
+    match mode {
+        0 => VisualEffect::fade_in(),
+        1 => VisualEffect::gradient(
+            Color::Rgb(56, 189, 248),
+            Color::Rgb(244, 114, 182),
+            GradientDirection::Diagonal,
+        )
+        .phase(progress),
+        2 => VisualEffect::shatter().with_seed(42).with_spread(24.0, 8.0),
+        3 => VisualEffect::magic_lamp(VisualAnchor::Bottom).squeeze(0.04),
+        4 => VisualEffect::stagger_rows(
+            0.035,
+            VisualEffect::reveal(WipeDirection::LeftToRight).softness(0.04),
+        ),
+        5 => VisualEffect::dissolve().with_seed(0x5150),
+        6 => VisualEffect::parallel(vec![
+            VisualEffect::wave(WaveAxis::Rows)
+                .amplitude(3.0)
+                .wavelength(5.0)
+                .phase(progress),
+            VisualEffect::gradient(
+                Color::Rgb(125, 211, 252),
+                Color::Rgb(134, 239, 172),
+                GradientDirection::Horizontal,
+            )
+            .phase(progress * 0.5),
+        ]),
+        _ => VisualEffect::glitch().with_seed(0xBAD5_EED).intensity(0.85),
+    }
 }

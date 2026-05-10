@@ -30,6 +30,10 @@ cargo run -p tui --example tree
 cargo run -p tui --example flame
 ```
 
+`visual_effects` is the visual regression entry for the post-processing engine:
+it cycles through fade, gradient, shatter, magic-lamp, wipe, dissolve, wave, and
+glitch while showing compact, wide, reduced, and disabled-motion stages.
+
 ## Adding A New Example
 
 1. Put the file in the most appropriate category directory.

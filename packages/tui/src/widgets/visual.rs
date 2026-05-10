@@ -157,6 +157,26 @@ impl<M> Visual<M> {
         self.effect(VisualEffect::magic_lamp(anchor))
     }
 
+    pub fn wipe(self, direction: WipeDirection) -> Self {
+        self.effect(VisualEffect::wipe(direction))
+    }
+
+    pub fn reveal(self, direction: WipeDirection) -> Self {
+        self.effect(VisualEffect::reveal(direction))
+    }
+
+    pub fn dissolve(self) -> Self {
+        self.effect(VisualEffect::dissolve())
+    }
+
+    pub fn wave(self, axis: WaveAxis) -> Self {
+        self.effect(VisualEffect::wave(axis))
+    }
+
+    pub fn glitch(self) -> Self {
+        self.effect(VisualEffect::glitch())
+    }
+
     /// Drive effect progress with a one-shot animation from 0.0 to 1.0.
     pub fn animation(mut self, spec: AnimationSpec) -> Self {
         self.animation = Some(spec);
@@ -296,6 +316,25 @@ pub enum VisualEffect {
         anchor: VisualAnchor,
         squeeze: f64,
     },
+    Wipe {
+        direction: WipeDirection,
+        mode: WipeMode,
+        softness: f64,
+    },
+    Dissolve {
+        seed: u64,
+        mode: DissolveMode,
+    },
+    Wave {
+        axis: WaveAxis,
+        amplitude: f64,
+        wavelength: f64,
+        phase: f64,
+    },
+    Glitch {
+        seed: u64,
+        intensity: f64,
+    },
     Sequence(Vec<VisualEffect>),
     Parallel(Vec<VisualEffect>),
     Stagger {
@@ -350,6 +389,52 @@ impl VisualEffect {
         }
     }
 
+    pub fn wipe(direction: WipeDirection) -> Self {
+        Self::Wipe {
+            direction,
+            mode: WipeMode::Hide,
+            softness: 0.0,
+        }
+    }
+
+    pub fn reveal(direction: WipeDirection) -> Self {
+        Self::Wipe {
+            direction,
+            mode: WipeMode::Reveal,
+            softness: 0.0,
+        }
+    }
+
+    pub fn dissolve() -> Self {
+        Self::Dissolve {
+            seed: 0xD155_01F3,
+            mode: DissolveMode::In,
+        }
+    }
+
+    pub fn dissolve_out() -> Self {
+        Self::Dissolve {
+            seed: 0xD155_01F3,
+            mode: DissolveMode::Out,
+        }
+    }
+
+    pub fn wave(axis: WaveAxis) -> Self {
+        Self::Wave {
+            axis,
+            amplitude: 2.0,
+            wavelength: 6.0,
+            phase: 0.0,
+        }
+    }
+
+    pub fn glitch() -> Self {
+        Self::Glitch {
+            seed: 0x6_117C_4,
+            intensity: 0.42,
+        }
+    }
+
     /// Run child effects one after another with equal duration slices.
     ///
     /// Completed children are sampled at `1.0`; the active child receives its
@@ -398,6 +483,12 @@ impl VisualEffect {
             Self::Fade { .. } | Self::Gradient { .. } => self.clone(),
             Self::Shatter { .. } => Self::fade_out(),
             Self::MagicLamp { .. } => Self::fade_in(),
+            Self::Wipe { mode, .. } => fade_for_visibility_mode(*mode),
+            Self::Dissolve { mode, .. } => match mode {
+                DissolveMode::In => Self::fade_in(),
+                DissolveMode::Out => Self::fade_out(),
+            },
+            Self::Wave { .. } | Self::Glitch { .. } => Self::fade_in(),
             Self::Sequence(effects) => Self::Sequence(
                 effects
                     .iter()
@@ -419,8 +510,13 @@ impl VisualEffect {
     }
 
     pub fn with_seed(mut self, seed: u64) -> Self {
-        if let Self::Shatter { seed: current, .. } = &mut self {
-            *current = seed;
+        match &mut self {
+            Self::Shatter { seed: current, .. }
+            | Self::Dissolve { seed: current, .. }
+            | Self::Glitch { seed: current, .. } => {
+                *current = seed;
+            }
+            _ => {}
         }
         self
     }
@@ -447,8 +543,11 @@ impl VisualEffect {
     }
 
     pub fn phase(mut self, phase: f64) -> Self {
-        if let Self::Gradient { phase: current, .. } = &mut self {
-            *current = phase;
+        match &mut self {
+            Self::Gradient { phase: current, .. } | Self::Wave { phase: current, .. } => {
+                *current = finite_or(phase, 0.0);
+            }
+            _ => {}
         }
         self
     }
@@ -459,6 +558,47 @@ impl VisualEffect {
         } = &mut self
         {
             *current = squeeze.clamp(0.0, 1.0);
+        }
+        self
+    }
+
+    pub fn softness(mut self, softness: f64) -> Self {
+        if let Self::Wipe {
+            softness: current, ..
+        } = &mut self
+        {
+            *current = sanitize_softness(softness);
+        }
+        self
+    }
+
+    pub fn amplitude(mut self, amplitude: f64) -> Self {
+        if let Self::Wave {
+            amplitude: current, ..
+        } = &mut self
+        {
+            *current = finite_or(amplitude, 0.0).max(0.0);
+        }
+        self
+    }
+
+    pub fn wavelength(mut self, wavelength: f64) -> Self {
+        if let Self::Wave {
+            wavelength: current,
+            ..
+        } = &mut self
+        {
+            *current = finite_or(wavelength, 6.0).max(f64::EPSILON);
+        }
+        self
+    }
+
+    pub fn intensity(mut self, intensity: f64) -> Self {
+        if let Self::Glitch {
+            intensity: current, ..
+        } = &mut self
+        {
+            *current = finite_or(intensity, 0.0).clamp(0.0, 1.0);
         }
         self
     }
@@ -485,6 +625,40 @@ pub enum GradientDirection {
 pub enum GradientTarget {
     Foreground,
     Background,
+}
+
+/// Direction used by [`VisualEffect::Wipe`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WipeDirection {
+    LeftToRight,
+    RightToLeft,
+    TopToBottom,
+    BottomToTop,
+    CenterOut,
+    EdgesIn,
+    DiagonalDown,
+    DiagonalUp,
+}
+
+/// Visibility mode for wipe-style effects.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WipeMode {
+    Reveal,
+    Hide,
+}
+
+/// Visibility mode for dissolve effects.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DissolveMode {
+    In,
+    Out,
+}
+
+/// Axis used by [`VisualEffect::Wave`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WaveAxis {
+    Rows,
+    Cols,
 }
 
 /// Anchor point for spatial effects such as magic-lamp minimization.
@@ -779,6 +953,67 @@ impl VisualEffect {
                 sample.dest_y =
                     anchor_y + (sample.dest_y - anchor_y) * (open * open + pull * *squeeze);
             }
+            Self::Wipe {
+                direction,
+                mode,
+                softness,
+            } => {
+                let position = wipe_position(sample.source_x, sample.source_y, ctx, *direction);
+                sample.visible = wipe_visible(
+                    position,
+                    progress,
+                    *mode,
+                    *softness,
+                    ctx.seed ^ 0xA11C_E5,
+                    sample.source_x as u16,
+                    sample.source_y as u16,
+                );
+            }
+            Self::Dissolve { seed, mode } => {
+                let threshold = noise(
+                    sample.source_x as u16,
+                    sample.source_y as u16,
+                    effect_seed(ctx, *seed),
+                );
+                sample.visible = match mode {
+                    DissolveMode::In => threshold <= progress,
+                    DissolveMode::Out => threshold > progress,
+                };
+            }
+            Self::Wave {
+                axis,
+                amplitude,
+                wavelength,
+                phase,
+            } => {
+                let envelope = (progress * std::f64::consts::PI).sin().max(0.0);
+                if envelope > 0.0 && *amplitude > 0.0 {
+                    let wave = match axis {
+                        WaveAxis::Rows => {
+                            (sample.source_y / wavelength.max(f64::EPSILON) + *phase + progress)
+                                * std::f64::consts::TAU
+                        }
+                        WaveAxis::Cols => {
+                            (ctx.logical_x(sample.source_x) / wavelength.max(f64::EPSILON)
+                                + *phase
+                                + progress)
+                                * std::f64::consts::TAU
+                        }
+                    };
+                    let offset = wave.sin() * *amplitude * envelope;
+                    match axis {
+                        WaveAxis::Rows => {
+                            sample.dest_x += ctx.aspect_adjusted_x_offset(offset);
+                        }
+                        WaveAxis::Cols => {
+                            sample.dest_y += offset;
+                        }
+                    }
+                }
+            }
+            Self::Glitch { seed, intensity } => {
+                apply_glitch(sample, ctx, effect_seed(ctx, *seed), *intensity);
+            }
             Self::Sequence(effects) => {
                 apply_sequence(effects, sample, ctx);
             }
@@ -826,6 +1061,136 @@ fn apply_sequence(effects: &[VisualEffect], sample: &mut CellSample, ctx: &Visua
             break;
         }
     }
+}
+
+fn wipe_position(x: f64, y: f64, ctx: &VisualCtx<'_>, direction: WipeDirection) -> f64 {
+    let max_x = ctx.area.width().saturating_sub(1) as f64;
+    let max_y = ctx.area.height().saturating_sub(1) as f64;
+    let logical_x = ctx.logical_x(x);
+    let logical_max_x = ctx.logical_x(max_x);
+
+    let divide = |value: f64, max: f64| {
+        if max <= 0.0 {
+            0.0
+        } else {
+            (value / max).clamp(0.0, 1.0)
+        }
+    };
+
+    match direction {
+        WipeDirection::LeftToRight => divide(logical_x, logical_max_x),
+        WipeDirection::RightToLeft => divide(logical_max_x - logical_x, logical_max_x),
+        WipeDirection::TopToBottom => divide(y, max_y),
+        WipeDirection::BottomToTop => divide(max_y - y, max_y),
+        WipeDirection::CenterOut => {
+            let center_x = logical_max_x * 0.5;
+            let center_y = max_y * 0.5;
+            let max_distance = [
+                (0.0, 0.0),
+                (logical_max_x, 0.0),
+                (0.0, max_y),
+                (logical_max_x, max_y),
+            ]
+            .into_iter()
+            .map(|(corner_x, corner_y)| {
+                ((corner_x - center_x).powi(2) + (corner_y - center_y).powi(2)).sqrt()
+            })
+            .fold(0.0, f64::max);
+            let distance = ((logical_x - center_x).powi(2) + (y - center_y).powi(2)).sqrt();
+            divide(distance, max_distance)
+        }
+        WipeDirection::EdgesIn => {
+            let distance_to_edge = logical_x
+                .min((logical_max_x - logical_x).max(0.0))
+                .min(y.min((max_y - y).max(0.0)));
+            let max_distance = (logical_max_x * 0.5).min(max_y * 0.5);
+            divide(distance_to_edge, max_distance)
+        }
+        WipeDirection::DiagonalDown => divide(logical_x + y, logical_max_x + max_y),
+        WipeDirection::DiagonalUp => divide(logical_x + (max_y - y), logical_max_x + max_y),
+    }
+}
+
+fn wipe_visible(
+    position: f64,
+    progress: f64,
+    mode: WipeMode,
+    softness: f64,
+    seed: u64,
+    x: u16,
+    y: u16,
+) -> bool {
+    let position = position.clamp(0.0, 1.0);
+    let progress = progress.clamp(0.0, 1.0);
+    if progress <= 0.0 {
+        return mode == WipeMode::Hide;
+    }
+    if progress >= 1.0 {
+        return mode == WipeMode::Reveal;
+    }
+
+    if softness <= 0.0 {
+        return match mode {
+            WipeMode::Reveal => position <= progress,
+            WipeMode::Hide => position > progress,
+        };
+    }
+
+    let feather = softness.max(f64::EPSILON);
+    if position <= progress - feather {
+        return mode == WipeMode::Reveal;
+    }
+    if position >= progress + feather {
+        return mode == WipeMode::Hide;
+    }
+
+    let reveal_coverage = ((progress + feather - position) / (feather * 2.0)).clamp(0.0, 1.0);
+    let coverage = match mode {
+        WipeMode::Reveal => reveal_coverage,
+        WipeMode::Hide => 1.0 - reveal_coverage,
+    };
+    noise(x, y, seed) <= coverage
+}
+
+fn apply_glitch(sample: &mut CellSample, ctx: &VisualCtx<'_>, seed: u64, intensity: f64) {
+    let envelope = (ctx.progress * std::f64::consts::PI).sin().max(0.0);
+    let active = finite_or(intensity, 0.0).clamp(0.0, 1.0) * envelope;
+    if active <= 0.0 {
+        return;
+    }
+
+    let x = sample.source_x as u16;
+    let y = sample.source_y as u16;
+    let gate = noise(x, y, seed ^ 0x61_17C);
+    if gate > active {
+        return;
+    }
+
+    let horizontal = (noise(y, x, seed ^ 0x0FF5) * 3.0).floor() - 1.0;
+    let vertical = if noise(x, y, seed ^ 0x5CA1) < active * 0.45 {
+        if noise(y, x, seed ^ 0x51DE) < 0.5 {
+            -1.0
+        } else {
+            1.0
+        }
+    } else {
+        0.0
+    };
+    sample.dest_x += ctx.aspect_adjusted_x_offset(horizontal);
+    sample.dest_y += vertical;
+
+    if noise(x, y, seed ^ 0xC0DE) < active * 0.55 {
+        let charset = ['#', '%', '&', '+', '*', '!', '?', '/', '\\'];
+        let index = (noise(y, x, seed ^ 0xC4A7) * charset.len() as f64) as usize;
+        sample.content.c = Some(charset[index.min(charset.len() - 1)]);
+    }
+
+    let color = if noise(x, y, seed ^ 0xC010) < 0.5 {
+        Color::Rgb(255, 80, 120)
+    } else {
+        Color::Rgb(80, 220, 255)
+    };
+    apply_color(&mut sample.content, color, GradientTarget::Foreground);
 }
 
 fn staggered_progress(
@@ -876,6 +1241,29 @@ fn sanitize_delay(delay: f64) -> f64 {
     } else {
         0.0
     }
+}
+
+fn sanitize_softness(softness: f64) -> f64 {
+    finite_or(softness, 0.0).clamp(0.0, 1.0)
+}
+
+fn finite_or(value: f64, fallback: f64) -> f64 {
+    if value.is_finite() {
+        value
+    } else {
+        fallback
+    }
+}
+
+fn fade_for_visibility_mode(mode: WipeMode) -> VisualEffect {
+    match mode {
+        WipeMode::Reveal => VisualEffect::fade_in(),
+        WipeMode::Hide => VisualEffect::fade_out(),
+    }
+}
+
+fn effect_seed(ctx: &VisualCtx<'_>, seed: u64) -> u64 {
+    ctx.seed ^ seed
 }
 
 fn stable_seed(channel: &str, widget_key: Option<&str>) -> u64 {
@@ -1284,6 +1672,153 @@ mod tests {
             staggered_progress(&top, &ctx, 0.2, StaggerMode::Rows)
                 > staggered_progress(&bottom, &ctx, 0.2, StaggerMode::Rows)
         );
+    }
+
+    #[test]
+    fn center_wipe_uses_aspect_corrected_distance() {
+        let theme = Theme::dark();
+        let area = Area::new((0, 0).into(), (7, 3).into());
+        let square_ctx = VisualCtx::new(
+            0.88,
+            area,
+            std::time::Instant::now(),
+            1,
+            1.0,
+            MotionPolicy::default(),
+            &theme,
+            None,
+            123,
+        );
+        let narrow_ctx = VisualCtx::new(
+            0.88,
+            area,
+            std::time::Instant::now(),
+            1,
+            0.5,
+            MotionPolicy::default(),
+            &theme,
+            None,
+            123,
+        );
+        let effect = VisualEffect::reveal(WipeDirection::CenterOut);
+        let mut square = CellSample::new(6, 1, Stylized::plain('x'));
+        let mut narrow = CellSample::new(6, 1, Stylized::plain('x'));
+
+        effect.apply(&mut square, &square_ctx);
+        effect.apply(&mut narrow, &narrow_ctx);
+
+        assert!(!square.visible);
+        assert!(narrow.visible);
+    }
+
+    #[test]
+    fn dissolve_is_stable_for_same_seed() {
+        let theme = Theme::dark();
+        let area = Area::new((0, 0).into(), (8, 2).into());
+        let ctx = VisualCtx::new(
+            0.5,
+            area,
+            std::time::Instant::now(),
+            1,
+            1.0,
+            MotionPolicy::default(),
+            &theme,
+            None,
+            9001,
+        );
+        let effect = VisualEffect::dissolve().with_seed(77);
+        let mut first = CellSample::new(4, 1, Stylized::plain('x'));
+        let mut second = CellSample::new(4, 1, Stylized::plain('x'));
+
+        effect.apply(&mut first, &ctx);
+        effect.apply(&mut second, &ctx);
+
+        assert_eq!(first.visible, second.visible);
+    }
+
+    #[test]
+    fn wave_uses_cell_aspect_for_row_offsets() {
+        let theme = Theme::dark();
+        let area = Area::new((0, 0).into(), (12, 4).into());
+        let square_ctx = VisualCtx::new(
+            0.5,
+            area,
+            std::time::Instant::now(),
+            1,
+            1.0,
+            MotionPolicy::default(),
+            &theme,
+            None,
+            123,
+        );
+        let narrow_ctx = VisualCtx::new(
+            0.5,
+            area,
+            std::time::Instant::now(),
+            1,
+            0.5,
+            MotionPolicy::default(),
+            &theme,
+            None,
+            123,
+        );
+        let effect = VisualEffect::wave(WaveAxis::Rows)
+            .amplitude(4.0)
+            .wavelength(5.0);
+        let mut square = CellSample::new(4, 1, Stylized::plain('x'));
+        let mut narrow = CellSample::new(4, 1, Stylized::plain('x'));
+
+        effect.apply(&mut square, &square_ctx);
+        effect.apply(&mut narrow, &narrow_ctx);
+
+        assert_ne!(square.dest_x, narrow.dest_x);
+        assert_eq!(square.dest_y, narrow.dest_y);
+        assert!((narrow.dest_x - narrow.source_x).abs() < (square.dest_x - square.source_x).abs());
+    }
+
+    #[test]
+    fn glitch_is_stable_for_same_seed() {
+        let theme = Theme::dark();
+        let area = Area::new((0, 0).into(), (8, 2).into());
+        let ctx = VisualCtx::new(
+            0.5,
+            area,
+            std::time::Instant::now(),
+            1,
+            1.0,
+            MotionPolicy::default(),
+            &theme,
+            None,
+            42,
+        );
+        let effect = VisualEffect::glitch().with_seed(123).intensity(1.0);
+        let mut first = CellSample::new(3, 1, Stylized::plain('x'));
+        let mut second = CellSample::new(3, 1, Stylized::plain('x'));
+
+        effect.apply(&mut first, &ctx);
+        effect.apply(&mut second, &ctx);
+
+        assert_eq!(first, second);
+    }
+
+    #[test]
+    fn reduced_motion_replaces_new_spatial_effects() {
+        assert!(matches!(
+            VisualEffect::reveal(WipeDirection::LeftToRight).reduced(),
+            VisualEffect::Fade { from: 0.0, to: 1.0 }
+        ));
+        assert!(matches!(
+            VisualEffect::dissolve_out().reduced(),
+            VisualEffect::Fade { from: 1.0, to: 0.0 }
+        ));
+        assert!(matches!(
+            VisualEffect::wave(WaveAxis::Rows).reduced(),
+            VisualEffect::Fade { from: 0.0, to: 1.0 }
+        ));
+        assert!(matches!(
+            VisualEffect::glitch().reduced(),
+            VisualEffect::Fade { from: 0.0, to: 1.0 }
+        ));
     }
 
     fn render_widget(widget: &impl Widget<()>, width: u16, height: u16) -> Buffer {
