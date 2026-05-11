@@ -1,14 +1,27 @@
 //! Shared offscreen rendering and buffer blitting helpers.
 
+use std::cell::RefCell;
+
 use render::area::{Area, Size};
 use render::buffer::{Buffer, Cell};
 use render::chunk::Chunk;
 use render::style::Stylized;
 
+thread_local! {
+    static OFFSCREEN_CACHE: RefCell<Vec<CachedOffscreen>> = const { RefCell::new(Vec::new()) };
+}
+
+#[derive(Debug)]
+struct CachedOffscreen {
+    key: Option<u64>,
+    buffer: Buffer,
+}
+
 /// Options controlling how cells are copied from an offscreen buffer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(crate) struct BlitOptions {
     skip_blank: bool,
+    dirty_only: bool,
 }
 
 impl BlitOptions {
@@ -17,6 +30,20 @@ impl BlitOptions {
         self.skip_blank = true;
         self
     }
+
+    /// Visit only cells whose source content changed since the previous clear.
+    pub(crate) fn dirty_only(mut self) -> Self {
+        self.dirty_only = true;
+        self
+    }
+}
+
+/// Coarse accounting collected while selecting blit cells.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) struct BlitStats {
+    pub(crate) visited: u64,
+    pub(crate) skipped_blank: u64,
+    pub(crate) skipped_clean: u64,
 }
 
 /// Source and destination rectangle for a buffer copy.
@@ -73,6 +100,49 @@ pub(crate) fn render_to_offscreen(
     Some(buffer)
 }
 
+/// Render into a reusable offscreen buffer and inspect it before returning the
+/// allocation to a thread-local cache.
+pub(crate) fn with_reused_offscreen<R>(
+    area: Area,
+    key: Option<u64>,
+    render: impl FnOnce(&mut Chunk<'_>),
+    read: impl FnOnce(&Buffer) -> R,
+) -> Option<R> {
+    let size = area.real_size();
+    let mut cached = OFFSCREEN_CACHE.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        cache
+            .iter()
+            .position(|cached| cached.key == key && cached.buffer.size() == size)
+            .map(|index| cache.swap_remove(index))
+            .unwrap_or_else(|| CachedOffscreen {
+                key,
+                buffer: Buffer::new(size),
+            })
+    });
+
+    if cached.buffer.size() != size {
+        cached.buffer.resize(size);
+    } else if key.is_some() {
+        cached.buffer.clear();
+    } else {
+        cached.buffer.clear_content();
+    }
+
+    {
+        let mut chunk = Chunk::new(&mut cached.buffer, area).ok()?;
+        render(&mut chunk);
+    }
+
+    let result = read(&cached.buffer);
+
+    OFFSCREEN_CACHE.with(|cache| {
+        cache.borrow_mut().push(cached);
+    });
+
+    Some(result)
+}
+
 /// Copy a clipped region from an offscreen buffer into a target chunk.
 pub(crate) fn blit_region(
     target: &mut Chunk<'_>,
@@ -93,14 +163,21 @@ pub(crate) fn for_each_blit_cell(
     dest_size: Option<Size>,
     options: BlitOptions,
     mut visit: impl FnMut(BlitCell),
-) {
+) -> BlitStats {
+    let mut stats = BlitStats::default();
     let source_size = source.size();
     let source_width = source_size.width as usize;
     let source_height = source_size.height as usize;
 
     if source_width == 0 || source_height == 0 || region.width == 0 || region.height == 0 {
-        return;
+        return stats;
     }
+
+    let previous = if options.dirty_only {
+        source.previous()
+    } else {
+        None
+    };
 
     for row in 0..region.height {
         let source_y = region.source_y + row;
@@ -128,10 +205,20 @@ pub(crate) fn for_each_blit_cell(
             let Some(cell) = source.content().get(index) else {
                 continue;
             };
+            if previous
+                .and_then(|previous| previous.get(index))
+                .map(|previous| previous == cell)
+                .unwrap_or(false)
+            {
+                stats.skipped_clean += 1;
+                continue;
+            }
             if should_skip_cell(cell, options) {
+                stats.skipped_blank += 1;
                 continue;
             }
 
+            stats.visited += 1;
             visit(BlitCell {
                 source_x: source_x as u16,
                 source_y: source_y as u16,
@@ -141,6 +228,8 @@ pub(crate) fn for_each_blit_cell(
             });
         }
     }
+
+    stats
 }
 
 fn should_skip_cell(cell: &Cell, options: BlitOptions) -> bool {
@@ -221,6 +310,30 @@ mod tests {
         }
 
         assert_eq!(cell_char(&target, 0, 0), Some('z'));
+    }
+
+    #[test]
+    fn blit_iteration_can_skip_clean_cells() {
+        let mut source = Buffer::new((3, 1).into());
+        let _ = source.overwrite((0, 0).into(), Stylized::plain('a'));
+        let _ = source.overwrite((1, 0).into(), Stylized::plain('b'));
+        source.clear();
+        let _ = source.overwrite((0, 0).into(), Stylized::plain('a'));
+        let _ = source.overwrite((1, 0).into(), Stylized::plain('c'));
+
+        let mut visited = Vec::new();
+        let stats = for_each_blit_cell(
+            &source,
+            BlitRegion::new(0, 0, 0, 0, 3, 1),
+            Some((3, 1).into()),
+            BlitOptions::default().skip_blank().dirty_only(),
+            |cell| visited.push((cell.dest_x, cell.dest_y, cell.content.c)),
+        );
+
+        assert_eq!(visited, vec![(1, 0, Some('c'))]);
+        assert_eq!(stats.visited, 1);
+        assert_eq!(stats.skipped_clean, 2);
+        assert_eq!(stats.skipped_blank, 0);
     }
 
     fn cell_char(buffer: &Buffer, x: u16, y: u16) -> Option<char> {

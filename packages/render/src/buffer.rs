@@ -123,6 +123,16 @@ impl Buffer {
         self.dirty = false;
     }
 
+    /// Clear the current buffer content without preserving diff state.
+    ///
+    /// This is useful for transient offscreen buffers where callers want to
+    /// reuse allocation but do not need frame-to-frame diffing.
+    pub fn clear_content(&mut self) {
+        self.content.fill(Cell::space());
+        self.previous = None;
+        self.dirty = false;
+    }
+
     /// Reset diff state (clears previous buffer)
     pub fn reset_diff(&mut self) {
         self.previous = None;

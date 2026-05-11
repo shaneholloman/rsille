@@ -4,6 +4,8 @@
 //! resulting terminal cells back into the target chunk with optional color and
 //! geometry transforms.
 
+use std::fmt;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crossterm::style::{Color as CrosstermColor, Colors};
@@ -17,11 +19,13 @@ use crate::animation::{
 };
 use crate::focus::FocusConfig;
 use crate::layout::Constraints;
-use crate::offscreen::{for_each_blit_cell, render_to_offscreen, BlitOptions, BlitRegion};
+use crate::offscreen::{for_each_blit_cell, with_reused_offscreen, BlitOptions, BlitRegion};
 use crate::style::{Color, EffectSlot, Style, Theme};
 use crate::widget::{IntoWidget, RenderCtx, Widget, WidgetKey};
 
 const LARGE_EFFECT_AREA_CELLS: u32 = 2_400;
+
+type ProfileHook = Arc<dyn Fn(VisualProfile) + Send + Sync + 'static>;
 
 /// Wrap a widget with terminal-cell visual effects.
 pub fn visual<M>(child: impl IntoWidget<M>) -> Visual<M> {
@@ -38,6 +42,7 @@ pub struct Visual<M = ()> {
     widget_key: Option<String>,
     seed: Option<u64>,
     config: VisualConfig,
+    profile_hook: Option<ProfileHook>,
     effect_preset: Option<String>,
     presence: Presence,
     enter_effect: Option<LifecycleVisualEffect>,
@@ -53,6 +58,7 @@ impl<M> std::fmt::Debug for Visual<M> {
             .field("channel", &self.channel)
             .field("seed", &self.seed)
             .field("config", &self.config)
+            .field("profile_hook", &self.profile_hook.is_some())
             .field("effect_preset", &self.effect_preset)
             .field("presence", &self.presence)
             .field("enter_effect", &self.enter_effect)
@@ -82,6 +88,7 @@ impl LifecycleVisualEffect {
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct VisualConfig {
     cell_aspect: Option<f64>,
+    performance: VisualPerformanceConfig,
 }
 
 impl VisualConfig {
@@ -98,11 +105,123 @@ impl VisualConfig {
     pub fn cell_aspect_override(self) -> Option<f64> {
         self.cell_aspect
     }
+
+    /// Override performance behavior for this wrapper.
+    pub fn performance(mut self, performance: VisualPerformanceConfig) -> Self {
+        self.performance = performance;
+        self
+    }
+
+    /// Override the cell-count threshold where large-area degradation begins.
+    pub fn large_area_threshold(mut self, cells: u32) -> Self {
+        self.performance = self.performance.large_area_threshold(cells);
+        self
+    }
+
+    /// Override the strategy used when the wrapped area exceeds the threshold.
+    pub fn large_area_policy(mut self, policy: LargeAreaPolicy) -> Self {
+        self.performance = self.performance.large_area_policy(policy);
+        self
+    }
+
+    /// Return the local performance strategy.
+    pub fn performance_config(self) -> VisualPerformanceConfig {
+        self.performance
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct ResolvedVisualConfig {
     cell_aspect: f64,
+    performance: VisualPerformanceConfig,
+}
+
+/// Controls how visual effects trade fidelity for cost.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VisualPerformanceConfig {
+    large_area_threshold: u32,
+    large_area_policy: LargeAreaPolicy,
+}
+
+impl Default for VisualPerformanceConfig {
+    fn default() -> Self {
+        Self {
+            large_area_threshold: LARGE_EFFECT_AREA_CELLS,
+            large_area_policy: LargeAreaPolicy::ReduceMotion,
+        }
+    }
+}
+
+impl VisualPerformanceConfig {
+    /// Number of cells after which large-area degradation is considered.
+    pub fn large_area_threshold(mut self, cells: u32) -> Self {
+        self.large_area_threshold = cells.max(1);
+        self
+    }
+
+    /// Strategy used when the target area is larger than the configured limit.
+    pub fn large_area_policy(mut self, policy: LargeAreaPolicy) -> Self {
+        self.large_area_policy = policy;
+        self
+    }
+
+    pub fn threshold(self) -> u32 {
+        self.large_area_threshold
+    }
+
+    pub fn policy(self) -> LargeAreaPolicy {
+        self.large_area_policy
+    }
+}
+
+/// Large-area degradation strategy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LargeAreaPolicy {
+    /// Preserve the effect exactly even for large regions.
+    Preserve,
+    /// Keep cheap color/visibility work and replace expensive spatial/noise work.
+    ReduceMotion,
+    /// Skip all visual effects and copy only the child output.
+    SkipEffects,
+}
+
+/// Approximate per-cell cost classification for visual effects.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VisualEffectCost {
+    Cheap,
+    Moderate,
+    Expensive,
+}
+
+impl VisualEffectCost {
+    fn max(self, other: Self) -> Self {
+        use VisualEffectCost::{Cheap, Expensive, Moderate};
+        match (self, other) {
+            (Expensive, _) | (_, Expensive) => Expensive,
+            (Moderate, _) | (_, Moderate) => Moderate,
+            _ => Cheap,
+        }
+    }
+}
+
+/// Profiling data emitted after one visual render pass.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct VisualProfile {
+    pub offscreen_render_time: Duration,
+    pub effect_apply_time: Duration,
+    pub processed_cells: u64,
+    pub skipped_cells: u64,
+    pub blank_cells_skipped: u64,
+    pub clean_cells_skipped: u64,
+    pub degradation: VisualDegradation,
+}
+
+/// Degradation flags active for one visual render pass.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct VisualDegradation {
+    pub large_area: bool,
+    pub reduced_motion: bool,
+    pub skipped_effects: bool,
 }
 
 impl<M> Visual<M> {
@@ -116,6 +235,7 @@ impl<M> Visual<M> {
             widget_key: None,
             seed: None,
             config: VisualConfig::default(),
+            profile_hook: None,
             effect_preset: None,
             presence: Presence::default(),
             enter_effect: None,
@@ -130,6 +250,12 @@ impl<M> Visual<M> {
 
     pub fn effect(mut self, effect: VisualEffect) -> Self {
         self.effects.push(effect);
+        self
+    }
+
+    /// Add a user-defined cell effect to the built-in effect pipeline.
+    pub fn custom_effect(mut self, effect: impl CellEffect) -> Self {
+        self.effects.push(VisualEffect::custom(effect));
         self
     }
 
@@ -158,6 +284,21 @@ impl<M> Visual<M> {
     /// Convenience for overriding only the terminal cell aspect.
     pub fn cell_aspect(mut self, cell_aspect: f64) -> Self {
         self.config = self.config.cell_aspect(cell_aspect);
+        self
+    }
+
+    /// Override the performance strategy for this wrapper.
+    pub fn performance(mut self, performance: VisualPerformanceConfig) -> Self {
+        self.config = self.config.performance(performance);
+        self
+    }
+
+    /// Install an optional profiling hook for this wrapper.
+    ///
+    /// Profiling is entirely opt-in; when no hook is set the render path avoids
+    /// timing and callback work.
+    pub fn profile(mut self, hook: impl Fn(VisualProfile) + Send + Sync + 'static) -> Self {
+        self.profile_hook = Some(Arc::new(hook));
         self
     }
 
@@ -284,6 +425,7 @@ impl<M> Visual<M> {
                 .config
                 .cell_aspect_override()
                 .unwrap_or(theme.effects.cell_aspect),
+            performance: self.config.performance_config(),
         }
     }
 
@@ -354,6 +496,42 @@ struct ResolvedEffectGroup {
     effects: Vec<VisualEffect>,
 }
 
+#[derive(Debug, Clone)]
+struct EffectiveEffectGroup<'a> {
+    ctx: VisualCtx<'a>,
+    effects: Vec<VisualEffect>,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct BlitReport {
+    effect_apply_time: Duration,
+    processed_cells: u64,
+    skipped_cells: u64,
+    blank_cells_skipped: u64,
+    clean_cells_skipped: u64,
+    degradation: VisualDegradation,
+}
+
+impl BlitReport {
+    fn into_profile(self, offscreen_render_time: Duration) -> VisualProfile {
+        VisualProfile {
+            offscreen_render_time,
+            effect_apply_time: self.effect_apply_time,
+            processed_cells: self.processed_cells,
+            skipped_cells: self.skipped_cells,
+            blank_cells_skipped: self.blank_cells_skipped,
+            clean_cells_skipped: self.clean_cells_skipped,
+            degradation: self.degradation,
+        }
+    }
+
+    fn add_degradation(&mut self, degradation: VisualDegradation) {
+        self.degradation.large_area |= degradation.large_area;
+        self.degradation.reduced_motion |= degradation.reduced_motion;
+        self.degradation.skipped_effects |= degradation.skipped_effects;
+    }
+}
+
 impl<M> Widget<M> for Visual<M> {
     fn render(&self, chunk: &mut render::chunk::Chunk, ctx: &RenderCtx) {
         let area = chunk.area();
@@ -369,33 +547,56 @@ impl<M> Widget<M> for Visual<M> {
             return;
         }
 
-        let child_ctx = ctx.child_ctx(WidgetKey::for_child(0, self.child.as_ref()));
-        let Some(offscreen) = render_to_offscreen(area, |offscreen_chunk| {
-            self.child.render(offscreen_chunk, &child_ctx);
-        }) else {
-            return;
-        };
         let seed = self
             .seed
             .unwrap_or_else(|| stable_seed(&self.channel, self.widget_key.as_deref()));
+        let child_ctx = ctx.child_ctx(WidgetKey::for_child(0, self.child.as_ref()));
         let resolved_config = self.resolve_config(ctx.theme());
-        let visual_ctx = VisualCtx::new(
-            1.0,
+        let profile_enabled = self.profile_hook.is_some();
+        let mut offscreen_render_time = Duration::ZERO;
+
+        let Some(report) = with_reused_offscreen(
             area,
-            ctx.now(),
-            ctx.frame(),
-            resolved_config.cell_aspect,
-            ctx.motion_policy(),
-            ctx.theme(),
-            self.effect_preset.as_deref(),
-            seed,
-        );
-        let effect_groups = self.resolve_effect_groups(ctx);
-        if effect_groups.iter().all(|group| group.effects.is_empty()) {
-            blit_with_effects(chunk, &offscreen, &[], &visual_ctx);
+            Some(seed),
+            |offscreen_chunk| {
+                let started = profile_enabled.then(Instant::now);
+                self.child.render(offscreen_chunk, &child_ctx);
+                if let Some(started) = started {
+                    offscreen_render_time = started.elapsed();
+                }
+            },
+            |offscreen| {
+                let visual_ctx = VisualCtx::new(
+                    1.0,
+                    area,
+                    ctx.now(),
+                    ctx.frame(),
+                    resolved_config.cell_aspect,
+                    ctx.motion_policy(),
+                    ctx.theme(),
+                    self.effect_preset.as_deref(),
+                    seed,
+                )
+                .with_performance(resolved_config.performance);
+                let effect_groups = self.resolve_effect_groups(ctx);
+                if effect_groups.iter().all(|group| group.effects.is_empty()) {
+                    return blit_with_effects(chunk, offscreen, &[], &visual_ctx, profile_enabled);
+                }
+                blit_with_effect_groups(
+                    chunk,
+                    offscreen,
+                    &effect_groups,
+                    &visual_ctx,
+                    profile_enabled,
+                )
+            },
+        ) else {
             return;
+        };
+
+        if let Some(hook) = &self.profile_hook {
+            hook(report.into_profile(offscreen_render_time));
         }
-        blit_with_effect_groups(chunk, &offscreen, &effect_groups, &visual_ctx);
     }
 
     fn constraints(&self) -> Constraints {
@@ -420,6 +621,52 @@ impl<M> Widget<M> for Visual<M> {
         } else {
             None
         }
+    }
+}
+
+/// User-defined terminal-cell effect.
+///
+/// The trait is object-safe and intentionally cell-scoped: custom effects can
+/// read [`VisualCtx`] for progress, theme, motion policy and stable randomness,
+/// but they do not own widget state or emit application messages.
+pub trait CellEffect: Send + Sync + 'static {
+    fn apply(&self, sample: &mut CellSample, ctx: VisualCtx<'_>);
+
+    fn estimated_cost(&self) -> VisualEffectCost {
+        VisualEffectCost::Moderate
+    }
+}
+
+#[derive(Clone)]
+pub struct CustomCellEffect {
+    name: &'static str,
+    effect: Arc<dyn CellEffect>,
+}
+
+impl CustomCellEffect {
+    pub fn new(name: &'static str, effect: impl CellEffect) -> Self {
+        Self {
+            name,
+            effect: Arc::new(effect),
+        }
+    }
+
+    pub fn name(&self) -> &'static str {
+        self.name
+    }
+}
+
+impl fmt::Debug for CustomCellEffect {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CustomCellEffect")
+            .field("name", &self.name)
+            .finish_non_exhaustive()
+    }
+}
+
+impl PartialEq for CustomCellEffect {
+    fn eq(&self, other: &Self) -> bool {
+        self.name == other.name && Arc::ptr_eq(&self.effect, &other.effect)
     }
 }
 
@@ -473,6 +720,7 @@ pub enum VisualEffect {
         mode: StaggerMode,
         effect: Box<VisualEffect>,
     },
+    Custom(CustomCellEffect),
 }
 
 impl VisualEffect {
@@ -566,6 +814,16 @@ impl VisualEffect {
         }
     }
 
+    /// Wrap a user-defined cell effect so it can be composed with built-ins.
+    pub fn custom(effect: impl CellEffect) -> Self {
+        Self::custom_named("custom", effect)
+    }
+
+    /// Wrap a user-defined cell effect with a stable debug/profiling name.
+    pub fn custom_named(name: &'static str, effect: impl CellEffect) -> Self {
+        Self::Custom(CustomCellEffect::new(name, effect))
+    }
+
     /// Run child effects one after another with equal duration slices.
     ///
     /// Completed children are sampled at `1.0`; the active child receives its
@@ -637,6 +895,28 @@ impl VisualEffect {
                 mode: *mode,
                 effect: Box::new(effect.reduced()),
             },
+            Self::Custom(effect) => Self::Custom(effect.clone()),
+        }
+    }
+
+    /// Approximate cost used by degradation and profiling hooks.
+    pub fn estimated_cost(&self) -> VisualEffectCost {
+        match self {
+            Self::Fade { .. } | Self::Gradient { .. } | Self::Wipe { softness: 0.0, .. } => {
+                VisualEffectCost::Cheap
+            }
+            Self::Wipe { .. } | Self::MagicLamp { .. } | Self::Wave { .. } => {
+                VisualEffectCost::Moderate
+            }
+            Self::Sequence(effects) | Self::Parallel(effects) => effects
+                .iter()
+                .map(VisualEffect::estimated_cost)
+                .fold(VisualEffectCost::Cheap, VisualEffectCost::max),
+            Self::Stagger { effect, .. } => effect.estimated_cost().max(VisualEffectCost::Moderate),
+            Self::Shatter { .. } | Self::Dissolve { .. } | Self::Glitch { .. } => {
+                VisualEffectCost::Expensive
+            }
+            Self::Custom(effect) => effect.effect.estimated_cost(),
         }
     }
 
@@ -871,6 +1151,8 @@ pub struct VisualCtx<'a> {
     pub effect_preset: Option<&'a str>,
     /// Stable seed available to deterministic effects.
     pub seed: u64,
+    /// Performance and degradation strategy active for this wrapper.
+    pub performance: VisualPerformanceConfig,
 }
 
 impl<'a> VisualCtx<'a> {
@@ -896,6 +1178,7 @@ impl<'a> VisualCtx<'a> {
             theme,
             effect_preset,
             seed,
+            performance: VisualPerformanceConfig::default(),
         }
     }
 
@@ -923,12 +1206,19 @@ impl<'a> VisualCtx<'a> {
 
     /// Whether area-sensitive effects should prefer cheaper reduced behavior.
     pub fn is_large_area(self) -> bool {
-        self.area.width() as u32 * self.area.height() as u32 > LARGE_EFFECT_AREA_CELLS
+        self.area.width() as u32 * self.area.height() as u32 > self.performance.threshold()
     }
 
     fn with_progress(self, progress: f64) -> Self {
         Self {
             progress: progress.clamp(0.0, 1.0),
+            ..self
+        }
+    }
+
+    fn with_performance(self, performance: VisualPerformanceConfig) -> Self {
+        Self {
+            performance,
             ..self
         }
     }
@@ -969,7 +1259,10 @@ fn blit_with_effects(
     source: &Buffer,
     effects: &[VisualEffect],
     ctx: &VisualCtx<'_>,
-) {
+    profile_enabled: bool,
+) -> BlitReport {
+    let started = profile_enabled.then(Instant::now);
+    let mut report = BlitReport::default();
     let region = BlitRegion::new(
         ctx.area.x() as usize,
         ctx.area.y() as usize,
@@ -979,17 +1272,23 @@ fn blit_with_effects(
         ctx.area.height() as usize,
     );
 
-    for_each_blit_cell(
+    let options = if effects.is_empty() {
+        BlitOptions::default().skip_blank().dirty_only()
+    } else {
+        BlitOptions::default().skip_blank()
+    };
+    let blit_stats = for_each_blit_cell(
         source,
         region,
         Some(ctx.area.size()),
-        BlitOptions::default().skip_blank(),
+        options,
         |cell| {
             let mut sample = CellSample::new(cell.dest_x, cell.dest_y, cell.content);
 
             for effect in effects {
                 effect.apply(&mut sample, ctx);
                 if !sample.visible {
+                    report.skipped_cells += 1;
                     break;
                 }
             }
@@ -1003,9 +1302,18 @@ fn blit_with_effects(
                 && dest_y < ctx.area.height() as i32
             {
                 let _ = chunk.set_forced(dest_x as u16, dest_y as u16, sample.content);
+                report.processed_cells += 1;
+            } else if sample.visible {
+                report.skipped_cells += 1;
             }
         },
     );
+    report.blank_cells_skipped = blit_stats.skipped_blank;
+    report.clean_cells_skipped = blit_stats.skipped_clean;
+    if let Some(started) = started {
+        report.effect_apply_time = started.elapsed();
+    }
+    report
 }
 
 fn blit_with_effect_groups(
@@ -1013,14 +1321,21 @@ fn blit_with_effect_groups(
     source: &Buffer,
     groups: &[ResolvedEffectGroup],
     ctx: &VisualCtx<'_>,
-) {
-    let effective_groups: Vec<(VisualCtx<'_>, Vec<VisualEffect>)> = groups
+    profile_enabled: bool,
+) -> BlitReport {
+    let started = profile_enabled.then(Instant::now);
+    let mut report = BlitReport::default();
+    let effective_groups: Vec<EffectiveEffectGroup<'_>> = groups
         .iter()
         .map(|group| {
             let group_ctx =
                 ctx.with_progress(effective_progress(group.progress, ctx.motion_policy));
-            let effects = effective_effects(&group.effects, &group_ctx);
-            (group_ctx, effects)
+            let plan = plan_effects(&group.effects, &group_ctx);
+            report.add_degradation(plan.degradation);
+            EffectiveEffectGroup {
+                ctx: group_ctx,
+                effects: plan.effects,
+            }
         })
         .collect();
     let region = BlitRegion::new(
@@ -1032,18 +1347,30 @@ fn blit_with_effect_groups(
         ctx.area.height() as usize,
     );
 
-    for_each_blit_cell(
+    let options = if effective_groups
+        .iter()
+        .all(|group| group.effects.is_empty())
+    {
+        BlitOptions::default().skip_blank().dirty_only()
+    } else {
+        BlitOptions::default().skip_blank()
+    };
+    let blit_stats = for_each_blit_cell(
         source,
         region,
         Some(ctx.area.size()),
-        BlitOptions::default().skip_blank(),
+        options,
         |cell| {
             let mut sample = CellSample::new(cell.dest_x, cell.dest_y, cell.content);
 
-            for (group_ctx, effects) in &effective_groups {
-                for effect in effects {
-                    effect.apply(&mut sample, group_ctx);
+            for group in &effective_groups {
+                if group.effects.is_empty() {
+                    continue;
+                }
+                for effect in &group.effects {
+                    effect.apply(&mut sample, &group.ctx);
                     if !sample.visible {
+                        report.skipped_cells += 1;
                         break;
                     }
                 }
@@ -1062,9 +1389,18 @@ fn blit_with_effect_groups(
                 && dest_y < ctx.area.height() as i32
             {
                 let _ = chunk.set_forced(dest_x as u16, dest_y as u16, sample.content);
+                report.processed_cells += 1;
+            } else if sample.visible {
+                report.skipped_cells += 1;
             }
         },
     );
+    report.blank_cells_skipped = blit_stats.skipped_blank;
+    report.clean_cells_skipped = blit_stats.skipped_clean;
+    if let Some(started) = started {
+        report.effect_apply_time = started.elapsed();
+    }
+    report
 }
 
 fn lifecycle_progress(frames: &[crate::animation::TimelineFrame], fallback: f64) -> f64 {
@@ -1075,12 +1411,40 @@ fn lifecycle_progress(frames: &[crate::animation::TimelineFrame], fallback: f64)
         .clamp(0.0, 1.0)
 }
 
-fn effective_effects(effects: &[VisualEffect], ctx: &VisualCtx<'_>) -> Vec<VisualEffect> {
-    if ctx.motion_policy.reduced_motion || ctx.is_large_area() {
+#[derive(Debug, Clone, PartialEq)]
+struct EffectPlan {
+    effects: Vec<VisualEffect>,
+    degradation: VisualDegradation,
+}
+
+fn plan_effects(effects: &[VisualEffect], ctx: &VisualCtx<'_>) -> EffectPlan {
+    let large_area = ctx.is_large_area();
+    let policy = ctx.performance.policy();
+    let skip_for_large_area = large_area && policy == LargeAreaPolicy::SkipEffects;
+    let reduce_for_large_area = large_area && policy == LargeAreaPolicy::ReduceMotion;
+    let reduce = ctx.motion_policy.reduced_motion || reduce_for_large_area;
+
+    let planned = if skip_for_large_area {
+        Vec::new()
+    } else if reduce {
         effects.iter().map(VisualEffect::reduced).collect()
     } else {
         effects.to_vec()
+    };
+
+    EffectPlan {
+        effects: planned,
+        degradation: VisualDegradation {
+            large_area,
+            reduced_motion: reduce,
+            skipped_effects: skip_for_large_area,
+        },
     }
+}
+
+#[cfg(test)]
+fn effective_effects(effects: &[VisualEffect], ctx: &VisualCtx<'_>) -> Vec<VisualEffect> {
+    plan_effects(effects, ctx).effects
 }
 
 fn effective_progress(progress: f64, motion_policy: MotionPolicy) -> f64 {
@@ -1241,6 +1605,9 @@ impl VisualEffect {
             } => {
                 let local_progress = staggered_progress(sample, ctx, *delay, *mode);
                 effect.apply(sample, &ctx.with_progress(local_progress));
+            }
+            Self::Custom(effect) => {
+                effect.effect.apply(sample, *ctx);
             }
         }
     }
@@ -1570,6 +1937,7 @@ fn noise(x: u16, y: u16, seed: u64) -> f64 {
 mod tests {
     use std::cell::RefCell;
     use std::collections::HashMap;
+    use std::sync::{Arc, Mutex};
 
     use render::chunk::Chunk;
 
@@ -1682,6 +2050,50 @@ mod tests {
                 .resolve(&Theme::dark()),
             ThemeEffects::default().toast_enter
         );
+    }
+
+    #[test]
+    fn custom_cell_effect_can_be_applied_by_visual_wrapper() {
+        struct Uppercase;
+
+        impl CellEffect for Uppercase {
+            fn apply(&self, sample: &mut CellSample, _ctx: VisualCtx<'_>) {
+                sample.content.c = sample.content.c.and_then(|ch| ch.to_uppercase().next());
+            }
+
+            fn estimated_cost(&self) -> VisualEffectCost {
+                VisualEffectCost::Cheap
+            }
+        }
+
+        let widget = visual(label::<()>("ab"))
+            .progress(1.0)
+            .custom_effect(Uppercase);
+        let buffer = render_widget(&widget, 2, 1);
+
+        assert_eq!(cell_char(&buffer, 0, 0), Some('A'));
+        assert_eq!(cell_char(&buffer, 1, 0), Some('B'));
+        assert_eq!(
+            VisualEffect::custom_named("uppercase", Uppercase).estimated_cost(),
+            VisualEffectCost::Cheap
+        );
+    }
+
+    #[test]
+    fn visual_profile_hook_receives_render_counts() {
+        let profiles = Arc::new(Mutex::new(Vec::<VisualProfile>::new()));
+        let sink = Arc::clone(&profiles);
+        let widget = visual(label::<()>("profile"))
+            .progress(1.0)
+            .fade_in()
+            .profile(move |profile| sink.lock().unwrap().push(profile));
+
+        let _ = render_widget(&widget, 12, 1);
+
+        let profiles = profiles.lock().unwrap();
+        assert_eq!(profiles.len(), 1);
+        assert!(profiles[0].processed_cells > 0);
+        assert_eq!(profiles[0].degradation, VisualDegradation::default());
     }
 
     #[test]
@@ -1819,6 +2231,28 @@ mod tests {
             effects[0],
             VisualEffect::Fade { from: 0.0, to: 1.0 }
         ));
+    }
+
+    #[test]
+    fn large_area_policy_can_skip_effects_and_report_degradation() {
+        let profiles = Arc::new(Mutex::new(Vec::<VisualProfile>::new()));
+        let sink = Arc::clone(&profiles);
+        let performance = VisualPerformanceConfig::default()
+            .large_area_threshold(1)
+            .large_area_policy(LargeAreaPolicy::SkipEffects);
+        let widget = visual(label::<()>("wide"))
+            .seed(0x5A1F)
+            .progress(0.5)
+            .performance(performance)
+            .shatter()
+            .profile(move |profile| sink.lock().unwrap().push(profile));
+
+        let buffer = render_widget(&widget, 4, 1);
+
+        assert_eq!(cell_char(&buffer, 0, 0), Some('w'));
+        let profile = profiles.lock().unwrap()[0];
+        assert!(profile.degradation.large_area);
+        assert!(profile.degradation.skipped_effects);
     }
 
     #[test]
