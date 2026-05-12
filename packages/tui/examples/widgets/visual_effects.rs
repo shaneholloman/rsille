@@ -30,7 +30,7 @@ struct Mode {
     risk: &'static str,
 }
 
-const MODES: [Mode; 8] = [
+const MODES: [Mode; 13] = [
     Mode {
         name: "Fade",
         risk: "opacity mask",
@@ -62,6 +62,26 @@ const MODES: [Mode; 8] = [
     Mode {
         name: "Glitch",
         risk: "seeded jitter",
+    },
+    Mode {
+        name: "Scanline",
+        risk: "crt overlay",
+    },
+    Mode {
+        name: "Typewriter",
+        risk: "row-major reveal",
+    },
+    Mode {
+        name: "Blur-like",
+        risk: "cell degradation",
+    },
+    Mode {
+        name: "Highlight",
+        risk: "focus sweep",
+    },
+    Mode {
+        name: "Sparkle",
+        risk: "density gate",
     },
 ];
 
@@ -98,6 +118,7 @@ fn next_mode(state: &mut State) {
 fn effect_duration(mode: usize) -> f64 {
     match mode {
         1 | 6 | 7 => 4.8,
+        8 | 11 | 12 => 4.8,
         2 => 2.4,
         3 => 4.2,
         _ => 3.4,
@@ -174,7 +195,7 @@ fn policy_preview(state: &State) -> impl Widget<Msg> {
         .child(policy_stage("Reduced", state.progress, effect.reduced()))
         .child(policy_stage("Disabled", 1.0, effect))
         .child(divider())
-        .child(label("normal / reduced / disabled"))
+        .child(theme_slots(state.progress))
 }
 
 fn policy_stage(name: &'static str, progress: f64, effect: VisualEffect) -> Visual<Msg> {
@@ -186,6 +207,66 @@ fn policy_stage(name: &'static str, progress: f64, effect: VisualEffect) -> Visu
         .child(label("api edge jobs"));
 
     visual(body).progress(progress).seed(77).effect(effect)
+}
+
+fn theme_slots(progress: f64) -> impl Widget<Msg> {
+    panel::<Msg>()
+        .title("Theme Slots")
+        .padding(Padding::uniform(1))
+        .gap(1)
+        .child(slot_stage(
+            "modal in",
+            progress,
+            EffectSlot::ModalEnter,
+            ThemeEffects::default(),
+        ))
+        .child(slot_stage(
+            "modal out",
+            progress,
+            EffectSlot::ModalExit,
+            ThemeEffects::default(),
+        ))
+        .child(slot_stage(
+            "toast in",
+            progress,
+            EffectSlot::ToastEnter,
+            ThemeEffects::default(),
+        ))
+        .child(slot_stage(
+            "toast out",
+            progress,
+            EffectSlot::ToastExit,
+            ThemeEffects::default(),
+        ))
+        .child(slot_stage(
+            "focus",
+            progress,
+            EffectSlot::FocusPulse,
+            ThemeEffects::default(),
+        ))
+        .child(slot_stage(
+            "screen",
+            progress,
+            EffectSlot::ScreenTransition,
+            ThemeEffects::default(),
+        ))
+}
+
+fn slot_stage(
+    name: &'static str,
+    progress: f64,
+    slot: EffectSlot,
+    effects: ThemeEffects,
+) -> Visual<Msg> {
+    visual(
+        row::<Msg>()
+            .gap(1)
+            .child(label(format!("{name:<9}")).fg(Color::Cyan))
+            .child(label("theme preset")),
+    )
+    .progress(progress)
+    .seed(0x5107)
+    .effect(effects.get(slot))
 }
 
 fn stage_body(title: &'static str, state: &State, wide: bool) -> impl Widget<Msg> {
@@ -251,6 +332,22 @@ fn stage_effect(mode: usize, progress: f64) -> VisualEffect {
             )
             .phase(progress * 0.5),
         ]),
-        _ => VisualEffect::glitch().with_seed(0xBAD5_EED).intensity(0.85),
+        7 => VisualEffect::glitch().with_seed(0xBAD5_EED).intensity(0.85),
+        8 => VisualEffect::scanline()
+            .density(0.5)
+            .intensity(0.42)
+            .phase(progress),
+        9 => VisualEffect::typewriter().cursor(true),
+        10 => VisualEffect::blur_like()
+            .radius(2.0)
+            .blur_mode(BlurMode::In),
+        11 => VisualEffect::highlight_sweep()
+            .width(0.18)
+            .color(Color::Rgb(255, 255, 180))
+            .direction(GradientDirection::Diagonal),
+        _ => VisualEffect::sparkle()
+            .density(0.12)
+            .color(Color::Rgb(255, 255, 200))
+            .with_seed(0x5FA2_C1E),
     }
 }

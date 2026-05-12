@@ -16,6 +16,7 @@ use crate::focus::FocusConfig;
 use crate::layout::Constraints;
 use crate::style::Style;
 use crate::style::Theme;
+use crate::widgets::visual::TerminalVisualCapabilities;
 
 // ---------------------------------------------------------------------------
 // WidgetKey, WidgetPath & WidgetId
@@ -470,6 +471,7 @@ pub struct RenderCtx<'a> {
     now: std::time::Instant,
     frame: u64,
     motion_policy: MotionPolicy,
+    visual_capabilities: TerminalVisualCapabilities,
     layout_target: Option<Area>,
     layout_managed: bool,
     exit_render: bool,
@@ -498,6 +500,7 @@ impl<'a> RenderCtx<'a> {
             now: std::time::Instant::now(),
             frame: 0,
             motion_policy: MotionPolicy::default(),
+            visual_capabilities: TerminalVisualCapabilities::default(),
             layout_target: None,
             layout_managed: false,
             exit_render: false,
@@ -515,6 +518,7 @@ impl<'a> RenderCtx<'a> {
         now: std::time::Instant,
         frame: u64,
         motion_policy: MotionPolicy,
+        visual_capabilities: TerminalVisualCapabilities,
     ) -> Self {
         Self {
             store,
@@ -531,6 +535,7 @@ impl<'a> RenderCtx<'a> {
             now,
             frame,
             motion_policy,
+            visual_capabilities,
             layout_target: None,
             layout_managed: false,
             exit_render: false,
@@ -555,6 +560,11 @@ impl<'a> RenderCtx<'a> {
     /// The global motion policy active for this render pass.
     pub fn motion_policy(&self) -> MotionPolicy {
         self.motion_policy
+    }
+
+    /// Terminal feature hints active for visual post-processing effects.
+    pub fn visual_capabilities(&self) -> TerminalVisualCapabilities {
+        self.visual_capabilities
     }
 
     /// Whether this render pass is drawing a retained exiting subtree.
@@ -726,6 +736,7 @@ impl<'a> RenderCtx<'a> {
             now: self.now,
             frame: self.frame,
             motion_policy: self.motion_policy,
+            visual_capabilities: self.visual_capabilities,
             layout_target: None,
             layout_managed: false,
             exit_render: self.exit_render,
@@ -755,6 +766,7 @@ impl<'a> RenderCtx<'a> {
             now: self.now,
             frame: self.frame,
             motion_policy: self.motion_policy,
+            visual_capabilities: self.visual_capabilities,
             layout_target: Some(target),
             layout_managed: true,
             exit_render: self.exit_render,
@@ -781,6 +793,7 @@ impl<'a> RenderCtx<'a> {
             now: self.now,
             frame: self.frame,
             motion_policy: self.motion_policy,
+            visual_capabilities: self.visual_capabilities,
             layout_target: self.layout_target,
             layout_managed: self.layout_managed,
             exit_render: true,

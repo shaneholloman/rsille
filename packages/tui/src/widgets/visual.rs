@@ -8,7 +8,7 @@ use std::fmt;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use crossterm::style::{Color as CrosstermColor, Colors};
+use crossterm::style::{Attribute, Attributes, Color as CrosstermColor, Colors};
 use render::area::Area;
 use render::buffer::Buffer;
 use render::style::Stylized;
@@ -171,6 +171,41 @@ impl VisualPerformanceConfig {
 
     pub fn policy(self) -> LargeAreaPolicy {
         self.large_area_policy
+    }
+}
+
+/// Terminal feature hints used to degrade visual effects conservatively.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TerminalVisualCapabilities {
+    pub truecolor: bool,
+    pub unicode_blocks: bool,
+    pub max_effect_cells: u32,
+}
+
+impl Default for TerminalVisualCapabilities {
+    fn default() -> Self {
+        Self {
+            truecolor: true,
+            unicode_blocks: true,
+            max_effect_cells: u32::MAX,
+        }
+    }
+}
+
+impl TerminalVisualCapabilities {
+    pub fn truecolor(mut self, truecolor: bool) -> Self {
+        self.truecolor = truecolor;
+        self
+    }
+
+    pub fn unicode_blocks(mut self, unicode_blocks: bool) -> Self {
+        self.unicode_blocks = unicode_blocks;
+        self
+    }
+
+    pub fn max_effect_cells(mut self, max_effect_cells: u32) -> Self {
+        self.max_effect_cells = max_effect_cells.max(1);
+        self
     }
 }
 
@@ -340,6 +375,26 @@ impl<M> Visual<M> {
 
     pub fn glitch(self) -> Self {
         self.effect(VisualEffect::glitch())
+    }
+
+    pub fn scanline(self) -> Self {
+        self.effect(VisualEffect::scanline())
+    }
+
+    pub fn typewriter(self) -> Self {
+        self.effect(VisualEffect::typewriter())
+    }
+
+    pub fn blur_like(self) -> Self {
+        self.effect(VisualEffect::blur_like())
+    }
+
+    pub fn highlight_sweep(self) -> Self {
+        self.effect(VisualEffect::highlight_sweep())
+    }
+
+    pub fn sparkle(self) -> Self {
+        self.effect(VisualEffect::sparkle())
     }
 
     /// Drive effect progress with a one-shot animation from 0.0 to 1.0.
@@ -578,6 +633,7 @@ impl<M> Widget<M> for Visual<M> {
                     seed,
                 )
                 .with_performance(resolved_config.performance);
+                let visual_ctx = visual_ctx.with_capabilities(ctx.visual_capabilities());
                 let effect_groups = self.resolve_effect_groups(ctx);
                 if effect_groups.iter().all(|group| group.effects.is_empty()) {
                     return blit_with_effects(chunk, offscreen, &[], &visual_ctx, profile_enabled);
@@ -634,6 +690,10 @@ pub trait CellEffect: Send + Sync + 'static {
 
     fn estimated_cost(&self) -> VisualEffectCost {
         VisualEffectCost::Moderate
+    }
+
+    fn can_use_dirty_only(&self) -> bool {
+        false
     }
 }
 
@@ -712,6 +772,29 @@ pub enum VisualEffect {
     Glitch {
         seed: u64,
         intensity: f64,
+    },
+    Scanline {
+        density: f64,
+        intensity: f64,
+        phase: f64,
+    },
+    Typewriter {
+        mode: TypewriterMode,
+        cursor: bool,
+    },
+    BlurLike {
+        radius: f64,
+        mode: BlurMode,
+    },
+    HighlightSweep {
+        color: Color,
+        width: f64,
+        direction: GradientDirection,
+    },
+    Sparkle {
+        seed: u64,
+        density: f64,
+        color: Color,
     },
     Sequence(Vec<VisualEffect>),
     Parallel(Vec<VisualEffect>),
@@ -814,6 +897,51 @@ impl VisualEffect {
         }
     }
 
+    pub fn scanline() -> Self {
+        Self::Scanline {
+            density: 0.5,
+            intensity: 0.35,
+            phase: 0.0,
+        }
+    }
+
+    pub fn typewriter() -> Self {
+        Self::Typewriter {
+            mode: TypewriterMode::Chars,
+            cursor: false,
+        }
+    }
+
+    pub fn typewriter_words() -> Self {
+        Self::Typewriter {
+            mode: TypewriterMode::Words,
+            cursor: false,
+        }
+    }
+
+    pub fn blur_like() -> Self {
+        Self::BlurLike {
+            radius: 2.0,
+            mode: BlurMode::In,
+        }
+    }
+
+    pub fn highlight_sweep() -> Self {
+        Self::HighlightSweep {
+            color: Color::Rgb(255, 255, 180),
+            width: 0.18,
+            direction: GradientDirection::Horizontal,
+        }
+    }
+
+    pub fn sparkle() -> Self {
+        Self::Sparkle {
+            seed: 0x5_9A4C_13,
+            density: 0.08,
+            color: Color::Rgb(255, 255, 200),
+        }
+    }
+
     /// Wrap a user-defined cell effect so it can be composed with built-ins.
     pub fn custom(effect: impl CellEffect) -> Self {
         Self::custom_named("custom", effect)
@@ -869,7 +997,7 @@ impl VisualEffect {
     /// unchanged. Composition is preserved with zero stagger delay.
     pub fn reduced(&self) -> Self {
         match self {
-            Self::Fade { .. } | Self::Gradient { .. } => self.clone(),
+            Self::Fade { .. } | Self::Gradient { .. } | Self::Scanline { .. } => self.clone(),
             Self::Shatter { .. } => Self::fade_out(),
             Self::MagicLamp { .. } => Self::fade_in(),
             Self::Wipe { mode, .. } => fade_for_visibility_mode(*mode),
@@ -878,6 +1006,18 @@ impl VisualEffect {
                 DissolveMode::Out => Self::fade_out(),
             },
             Self::Wave { .. } | Self::Glitch { .. } => Self::fade_in(),
+            Self::Typewriter { .. } | Self::BlurLike { .. } | Self::Sparkle { .. } => {
+                Self::fade_in()
+            }
+            Self::HighlightSweep {
+                color,
+                width,
+                direction,
+            } => Self::HighlightSweep {
+                color: *color,
+                width: (*width * 0.5).clamp(0.02, 1.0),
+                direction: *direction,
+            },
             Self::Sequence(effects) => Self::Sequence(
                 effects
                     .iter()
@@ -902,12 +1042,17 @@ impl VisualEffect {
     /// Approximate cost used by degradation and profiling hooks.
     pub fn estimated_cost(&self) -> VisualEffectCost {
         match self {
-            Self::Fade { .. } | Self::Gradient { .. } | Self::Wipe { softness: 0.0, .. } => {
-                VisualEffectCost::Cheap
-            }
-            Self::Wipe { .. } | Self::MagicLamp { .. } | Self::Wave { .. } => {
-                VisualEffectCost::Moderate
-            }
+            Self::Fade { .. }
+            | Self::Gradient { .. }
+            | Self::Scanline { .. }
+            | Self::Typewriter { .. }
+            | Self::HighlightSweep { .. }
+            | Self::Wipe { softness: 0.0, .. } => VisualEffectCost::Cheap,
+            Self::Wipe { .. }
+            | Self::MagicLamp { .. }
+            | Self::Wave { .. }
+            | Self::BlurLike { .. }
+            | Self::Sparkle { .. } => VisualEffectCost::Moderate,
             Self::Sequence(effects) | Self::Parallel(effects) => effects
                 .iter()
                 .map(VisualEffect::estimated_cost)
@@ -924,7 +1069,8 @@ impl VisualEffect {
         match &mut self {
             Self::Shatter { seed: current, .. }
             | Self::Dissolve { seed: current, .. }
-            | Self::Glitch { seed: current, .. } => {
+            | Self::Glitch { seed: current, .. }
+            | Self::Sparkle { seed: current, .. } => {
                 *current = seed;
             }
             _ => {}
@@ -955,7 +1101,9 @@ impl VisualEffect {
 
     pub fn phase(mut self, phase: f64) -> Self {
         match &mut self {
-            Self::Gradient { phase: current, .. } | Self::Wave { phase: current, .. } => {
+            Self::Gradient { phase: current, .. }
+            | Self::Wave { phase: current, .. }
+            | Self::Scanline { phase: current, .. } => {
                 *current = finite_or(phase, 0.0);
             }
             _ => {}
@@ -1005,13 +1153,99 @@ impl VisualEffect {
     }
 
     pub fn intensity(mut self, intensity: f64) -> Self {
-        if let Self::Glitch {
-            intensity: current, ..
-        } = &mut self
-        {
-            *current = finite_or(intensity, 0.0).clamp(0.0, 1.0);
+        match &mut self {
+            Self::Glitch {
+                intensity: current, ..
+            }
+            | Self::Scanline {
+                intensity: current, ..
+            } => {
+                *current = finite_or(intensity, 0.0).clamp(0.0, 1.0);
+            }
+            _ => {}
         }
         self
+    }
+
+    pub fn density(mut self, density: f64) -> Self {
+        match &mut self {
+            Self::Scanline {
+                density: current, ..
+            }
+            | Self::Sparkle {
+                density: current, ..
+            } => {
+                *current = finite_or(density, 0.0).clamp(0.0, 1.0);
+            }
+            _ => {}
+        }
+        self
+    }
+
+    pub fn cursor(mut self, cursor: bool) -> Self {
+        if let Self::Typewriter {
+            cursor: current, ..
+        } = &mut self
+        {
+            *current = cursor;
+        }
+        self
+    }
+
+    pub fn radius(mut self, radius: f64) -> Self {
+        if let Self::BlurLike {
+            radius: current, ..
+        } = &mut self
+        {
+            *current = finite_or(radius, 0.0).max(0.0);
+        }
+        self
+    }
+
+    pub fn blur_mode(mut self, mode: BlurMode) -> Self {
+        if let Self::BlurLike { mode: current, .. } = &mut self {
+            *current = mode;
+        }
+        self
+    }
+
+    pub fn width(mut self, width: f64) -> Self {
+        if let Self::HighlightSweep { width: current, .. } = &mut self {
+            *current = finite_or(width, 0.18).clamp(f64::EPSILON, 1.0);
+        }
+        self
+    }
+
+    pub fn color(mut self, color: Color) -> Self {
+        match &mut self {
+            Self::HighlightSweep { color: current, .. } | Self::Sparkle { color: current, .. } => {
+                *current = color;
+            }
+            _ => {}
+        }
+        self
+    }
+
+    pub fn direction(mut self, direction: GradientDirection) -> Self {
+        if let Self::HighlightSweep {
+            direction: current, ..
+        } = &mut self
+        {
+            *current = direction;
+        }
+        self
+    }
+
+    fn can_use_dirty_only(&self) -> bool {
+        match self {
+            Self::Gradient { .. } | Self::Scanline { .. } => true,
+            Self::Sequence(effects) | Self::Parallel(effects) => {
+                effects.iter().all(VisualEffect::can_use_dirty_only)
+            }
+            Self::Stagger { effect, .. } => effect.can_use_dirty_only(),
+            Self::Custom(effect) => effect.effect.can_use_dirty_only(),
+            _ => false,
+        }
     }
 }
 
@@ -1061,6 +1295,21 @@ pub enum WipeMode {
 /// Visibility mode for dissolve effects.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DissolveMode {
+    In,
+    Out,
+}
+
+/// Visibility grouping used by [`VisualEffect::Typewriter`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TypewriterMode {
+    Chars,
+    /// Approximate word grouping that keeps the effect cell-local.
+    Words,
+}
+
+/// Direction of terminal-cell blur approximation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BlurMode {
     In,
     Out,
 }
@@ -1153,6 +1402,8 @@ pub struct VisualCtx<'a> {
     pub seed: u64,
     /// Performance and degradation strategy active for this wrapper.
     pub performance: VisualPerformanceConfig,
+    /// Terminal feature hints active for this render pass.
+    pub capabilities: TerminalVisualCapabilities,
 }
 
 impl<'a> VisualCtx<'a> {
@@ -1179,6 +1430,7 @@ impl<'a> VisualCtx<'a> {
             effect_preset,
             seed,
             performance: VisualPerformanceConfig::default(),
+            capabilities: TerminalVisualCapabilities::default(),
         }
     }
 
@@ -1219,6 +1471,18 @@ impl<'a> VisualCtx<'a> {
     fn with_performance(self, performance: VisualPerformanceConfig) -> Self {
         Self {
             performance,
+            ..self
+        }
+    }
+
+    fn with_capabilities(self, capabilities: TerminalVisualCapabilities) -> Self {
+        let threshold = self
+            .performance
+            .threshold()
+            .min(capabilities.max_effect_cells.max(1));
+        Self {
+            capabilities,
+            performance: self.performance.large_area_threshold(threshold),
             ..self
         }
     }
@@ -1272,42 +1536,36 @@ fn blit_with_effects(
         ctx.area.height() as usize,
     );
 
-    let options = if effects.is_empty() {
+    let options = if effects.iter().all(VisualEffect::can_use_dirty_only) {
         BlitOptions::default().skip_blank().dirty_only()
     } else {
         BlitOptions::default().skip_blank()
     };
-    let blit_stats = for_each_blit_cell(
-        source,
-        region,
-        Some(ctx.area.size()),
-        options,
-        |cell| {
-            let mut sample = CellSample::new(cell.dest_x, cell.dest_y, cell.content);
+    let blit_stats = for_each_blit_cell(source, region, Some(ctx.area.size()), options, |cell| {
+        let mut sample = CellSample::new(cell.dest_x, cell.dest_y, cell.content);
 
-            for effect in effects {
-                effect.apply(&mut sample, ctx);
-                if !sample.visible {
-                    report.skipped_cells += 1;
-                    break;
-                }
-            }
-
-            let dest_x = sample.dest_x.round() as i32;
-            let dest_y = sample.dest_y.round() as i32;
-            if sample.visible
-                && dest_x >= 0
-                && dest_y >= 0
-                && dest_x < ctx.area.width() as i32
-                && dest_y < ctx.area.height() as i32
-            {
-                let _ = chunk.set_forced(dest_x as u16, dest_y as u16, sample.content);
-                report.processed_cells += 1;
-            } else if sample.visible {
+        for effect in effects {
+            effect.apply(&mut sample, ctx);
+            if !sample.visible {
                 report.skipped_cells += 1;
+                break;
             }
-        },
-    );
+        }
+
+        let dest_x = sample.dest_x.round() as i32;
+        let dest_y = sample.dest_y.round() as i32;
+        if sample.visible
+            && dest_x >= 0
+            && dest_y >= 0
+            && dest_x < ctx.area.width() as i32
+            && dest_y < ctx.area.height() as i32
+        {
+            let _ = chunk.set_forced(dest_x as u16, dest_y as u16, sample.content);
+            report.processed_cells += 1;
+        } else if sample.visible {
+            report.skipped_cells += 1;
+        }
+    });
     report.blank_cells_skipped = blit_stats.skipped_blank;
     report.clean_cells_skipped = blit_stats.skipped_clean;
     if let Some(started) = started {
@@ -1349,52 +1607,46 @@ fn blit_with_effect_groups(
 
     let options = if effective_groups
         .iter()
-        .all(|group| group.effects.is_empty())
+        .all(|group| group.effects.iter().all(VisualEffect::can_use_dirty_only))
     {
         BlitOptions::default().skip_blank().dirty_only()
     } else {
         BlitOptions::default().skip_blank()
     };
-    let blit_stats = for_each_blit_cell(
-        source,
-        region,
-        Some(ctx.area.size()),
-        options,
-        |cell| {
-            let mut sample = CellSample::new(cell.dest_x, cell.dest_y, cell.content);
+    let blit_stats = for_each_blit_cell(source, region, Some(ctx.area.size()), options, |cell| {
+        let mut sample = CellSample::new(cell.dest_x, cell.dest_y, cell.content);
 
-            for group in &effective_groups {
-                if group.effects.is_empty() {
-                    continue;
-                }
-                for effect in &group.effects {
-                    effect.apply(&mut sample, &group.ctx);
-                    if !sample.visible {
-                        report.skipped_cells += 1;
-                        break;
-                    }
-                }
-
+        for group in &effective_groups {
+            if group.effects.is_empty() {
+                continue;
+            }
+            for effect in &group.effects {
+                effect.apply(&mut sample, &group.ctx);
                 if !sample.visible {
+                    report.skipped_cells += 1;
                     break;
                 }
             }
 
-            let dest_x = sample.dest_x.round() as i32;
-            let dest_y = sample.dest_y.round() as i32;
-            if sample.visible
-                && dest_x >= 0
-                && dest_y >= 0
-                && dest_x < ctx.area.width() as i32
-                && dest_y < ctx.area.height() as i32
-            {
-                let _ = chunk.set_forced(dest_x as u16, dest_y as u16, sample.content);
-                report.processed_cells += 1;
-            } else if sample.visible {
-                report.skipped_cells += 1;
+            if !sample.visible {
+                break;
             }
-        },
-    );
+        }
+
+        let dest_x = sample.dest_x.round() as i32;
+        let dest_y = sample.dest_y.round() as i32;
+        if sample.visible
+            && dest_x >= 0
+            && dest_y >= 0
+            && dest_x < ctx.area.width() as i32
+            && dest_y < ctx.area.height() as i32
+        {
+            let _ = chunk.set_forced(dest_x as u16, dest_y as u16, sample.content);
+            report.processed_cells += 1;
+        } else if sample.visible {
+            report.skipped_cells += 1;
+        }
+    });
     report.blank_cells_skipped = blit_stats.skipped_blank;
     report.clean_cells_skipped = blit_stats.skipped_clean;
     if let Some(started) = started {
@@ -1479,7 +1731,7 @@ impl VisualEffect {
                     shifted.rem_euclid(1.0)
                 };
                 let color = start.interpolate(*end, t);
-                apply_color(&mut sample.content, color, *target);
+                apply_color_capable(&mut sample.content, color, *target, ctx);
             }
             Self::Shatter {
                 seed,
@@ -1589,6 +1841,33 @@ impl VisualEffect {
             }
             Self::Glitch { seed, intensity } => {
                 apply_glitch(sample, ctx, effect_seed(ctx, *seed), *intensity);
+            }
+            Self::Scanline {
+                density,
+                intensity,
+                phase,
+            } => {
+                apply_scanline(sample, ctx, *density, *intensity, *phase);
+            }
+            Self::Typewriter { mode, cursor } => {
+                apply_typewriter(sample, ctx, *mode, *cursor);
+            }
+            Self::BlurLike { radius, mode } => {
+                apply_blur_like(sample, ctx, *radius, *mode);
+            }
+            Self::HighlightSweep {
+                color,
+                width,
+                direction,
+            } => {
+                apply_highlight_sweep(sample, ctx, *color, *width, *direction);
+            }
+            Self::Sparkle {
+                seed,
+                density,
+                color,
+            } => {
+                apply_sparkle(sample, ctx, effect_seed(ctx, *seed), *density, *color);
             }
             Self::Sequence(effects) => {
                 apply_sequence(effects, sample, ctx);
@@ -1769,7 +2048,173 @@ fn apply_glitch(sample: &mut CellSample, ctx: &VisualCtx<'_>, seed: u64, intensi
     } else {
         Color::Rgb(80, 220, 255)
     };
-    apply_color(&mut sample.content, color, GradientTarget::Foreground);
+    apply_color_capable(&mut sample.content, color, GradientTarget::Foreground, ctx);
+}
+
+fn apply_scanline(
+    sample: &mut CellSample,
+    ctx: &VisualCtx<'_>,
+    density: f64,
+    intensity: f64,
+    phase: f64,
+) {
+    let density = finite_or(density, 0.5).clamp(0.0, 1.0);
+    let intensity = finite_or(intensity, 0.35).clamp(0.0, 1.0);
+    if density <= 0.0 || intensity <= 0.0 {
+        return;
+    }
+
+    let period = (1.0 / density).round().max(1.0);
+    let lit_rows = (density * period).ceil().max(1.0);
+    let row = (sample.source_y + phase * period)
+        .floor()
+        .rem_euclid(period);
+    if row < lit_rows {
+        dim_foreground(sample, ctx, intensity);
+    }
+}
+
+fn apply_typewriter(
+    sample: &mut CellSample,
+    ctx: &VisualCtx<'_>,
+    mode: TypewriterMode,
+    cursor: bool,
+) {
+    let total = (ctx.area.width() as u32 * ctx.area.height() as u32).max(1) as usize;
+    let index = (sample.source_y.round().max(0.0) as usize * ctx.area.width().max(1) as usize)
+        + sample.source_x.round().max(0.0) as usize;
+
+    let visible = match mode {
+        TypewriterMode::Chars => {
+            let visible_count = (ctx.progress.clamp(0.0, 1.0) * total as f64).floor() as usize;
+            index < visible_count
+        }
+        TypewriterMode::Words => {
+            let group_size = 6usize;
+            let groups = total.div_ceil(group_size).max(1);
+            let visible_groups = (ctx.progress.clamp(0.0, 1.0) * groups as f64).floor() as usize;
+            index / group_size < visible_groups
+        }
+    };
+
+    if visible || ctx.progress >= 1.0 {
+        return;
+    }
+
+    let cursor_index = (ctx.progress.clamp(0.0, 1.0) * total as f64).floor() as usize;
+    if cursor && index == cursor_index.min(total.saturating_sub(1)) && ctx.progress > 0.0 {
+        sample.visible = true;
+        sample.content.c = Some(if ctx.capabilities.unicode_blocks {
+            '▌'
+        } else {
+            '|'
+        });
+        apply_color_capable(
+            &mut sample.content,
+            ctx.theme
+                .styles
+                .border_focused
+                .fg_color
+                .unwrap_or(Color::Cyan),
+            GradientTarget::Foreground,
+            ctx,
+        );
+    } else {
+        sample.visible = false;
+    }
+}
+
+fn apply_blur_like(sample: &mut CellSample, ctx: &VisualCtx<'_>, radius: f64, mode: BlurMode) {
+    let radius = finite_or(radius, 2.0).max(0.0);
+    if radius <= 0.0 {
+        return;
+    }
+
+    let amount = match mode {
+        BlurMode::In => 1.0 - ctx.progress,
+        BlurMode::Out => ctx.progress,
+    }
+    .clamp(0.0, 1.0);
+    if amount <= 0.02 {
+        return;
+    }
+
+    dim_foreground(sample, ctx, amount * 0.6);
+    let Some(ch) = sample.content.c else {
+        return;
+    };
+    if ch.is_whitespace() {
+        return;
+    }
+
+    let x = sample.source_x as u16;
+    let y = sample.source_y as u16;
+    let seed = effect_seed(ctx, 0xB1_102E) ^ radius.to_bits();
+    let n = noise(x, y, seed);
+
+    if amount > 0.66 && n < amount * 0.55 {
+        sample.content.c = Some(' ');
+    } else if amount > 0.34 && n < amount {
+        let chars: &[char] = if ctx.capabilities.unicode_blocks {
+            &['░', '▒', '.', ':']
+        } else {
+            &['.', ':', ' ']
+        };
+        let index = (noise(y, x, seed.rotate_left(9)) * chars.len() as f64) as usize;
+        sample.content.c = Some(chars[index.min(chars.len() - 1)]);
+    }
+}
+
+fn apply_highlight_sweep(
+    sample: &mut CellSample,
+    ctx: &VisualCtx<'_>,
+    color: Color,
+    width: f64,
+    direction: GradientDirection,
+) {
+    let width = finite_or(width, 0.18).clamp(f64::EPSILON, 1.0);
+    let position = gradient_position(sample.dest_x, sample.dest_y, ctx.area, direction);
+    let coverage = 1.0 - ((position - ctx.progress).abs() / width);
+    if coverage <= 0.0 {
+        return;
+    }
+
+    blend_foreground(sample, ctx, color, coverage.clamp(0.0, 1.0));
+    add_attribute(&mut sample.content, Attribute::Bold);
+}
+
+fn apply_sparkle(
+    sample: &mut CellSample,
+    ctx: &VisualCtx<'_>,
+    seed: u64,
+    density: f64,
+    color: Color,
+) {
+    let density = finite_or(density, 0.08).clamp(0.0, 0.35);
+    if density <= 0.0 || sample.content.c.map(char::is_whitespace).unwrap_or(true) {
+        return;
+    }
+
+    let x = sample.source_x as u16;
+    let y = sample.source_y as u16;
+    let spatial = noise(x, y, seed ^ 0x5FA2_C1E);
+    if spatial > density {
+        return;
+    }
+
+    let frame_seed = seed ^ (ctx.frame / 3).wrapping_mul(0x9E37_79B9);
+    let twinkle = noise(y, x, frame_seed);
+    if twinkle > 0.55 {
+        return;
+    }
+
+    apply_color_capable(&mut sample.content, color, GradientTarget::Foreground, ctx);
+    add_attribute(&mut sample.content, Attribute::Bold);
+    if twinkle < 0.22 {
+        let chars = ['*', '+', '.'];
+        let index = (noise(x, y, frame_seed.rotate_left(13)) * chars.len() as f64) as usize;
+        sample.content.c = Some(chars[index.min(chars.len() - 1)]);
+    }
 }
 
 fn staggered_progress(
@@ -1887,8 +2332,16 @@ fn gradient_position(x: f64, y: f64, area: Area, direction: GradientDirection) -
     .clamp(0.0, 1.0)
 }
 
-fn apply_color(content: &mut Stylized, color: Color, target: GradientTarget) {
-    let color = to_crossterm_color(color);
+fn apply_color_capable(
+    content: &mut Stylized,
+    color: Color,
+    target: GradientTarget,
+    ctx: &VisualCtx<'_>,
+) {
+    apply_crossterm_color(content, capable_color(color, ctx), target);
+}
+
+fn apply_crossterm_color(content: &mut Stylized, color: CrosstermColor, target: GradientTarget) {
     let mut colors = content.style.colors.unwrap_or(Colors {
         foreground: None,
         background: None,
@@ -1899,6 +2352,154 @@ fn apply_color(content: &mut Stylized, color: Color, target: GradientTarget) {
         GradientTarget::Background => colors.background = Some(color),
     }
     content.style.colors = Some(colors);
+}
+
+fn current_foreground(content: &Stylized) -> Option<CrosstermColor> {
+    content.style.colors.and_then(|colors| colors.foreground)
+}
+
+fn add_attribute(content: &mut Stylized, attr: Attribute) {
+    let mut attrs = content.style.attr.unwrap_or_else(Attributes::default);
+    attrs = attrs | attr;
+    content.style.attr = Some(attrs);
+}
+
+fn dim_foreground(sample: &mut CellSample, ctx: &VisualCtx<'_>, amount: f64) {
+    let amount = amount.clamp(0.0, 1.0);
+    if let Some(color) = current_foreground(&sample.content) {
+        apply_crossterm_color(
+            &mut sample.content,
+            dim_crossterm_color(color, amount),
+            GradientTarget::Foreground,
+        );
+    } else {
+        let fallback = ctx.theme.styles.text_muted.fg_color.unwrap_or(Color::White);
+        apply_color_capable(
+            &mut sample.content,
+            fallback,
+            GradientTarget::Foreground,
+            ctx,
+        );
+    }
+    if amount > 0.25 {
+        add_attribute(&mut sample.content, Attribute::Dim);
+    }
+}
+
+fn blend_foreground(sample: &mut CellSample, ctx: &VisualCtx<'_>, target: Color, amount: f64) {
+    let target_color = capable_color(target, ctx);
+    let blended = current_foreground(&sample.content)
+        .map(|start| blend_crossterm_color(start, target_color, amount))
+        .unwrap_or(target_color);
+    apply_crossterm_color(&mut sample.content, blended, GradientTarget::Foreground);
+}
+
+fn capable_color(color: Color, ctx: &VisualCtx<'_>) -> CrosstermColor {
+    if ctx.capabilities.truecolor {
+        to_crossterm_color(color)
+    } else {
+        to_crossterm_color(to_basic_color(color))
+    }
+}
+
+fn to_basic_color(color: Color) -> Color {
+    let (r, g, b) = match color {
+        Color::Black => return Color::Black,
+        Color::Red => return Color::Red,
+        Color::Green => return Color::Green,
+        Color::Yellow => return Color::Yellow,
+        Color::Blue => return Color::Blue,
+        Color::Magenta => return Color::Magenta,
+        Color::Cyan => return Color::Cyan,
+        Color::White => return Color::White,
+        Color::Indexed(index) => {
+            return match index % 8 {
+                0 => Color::Black,
+                1 => Color::Red,
+                2 => Color::Green,
+                3 => Color::Yellow,
+                4 => Color::Blue,
+                5 => Color::Magenta,
+                6 => Color::Cyan,
+                _ => Color::White,
+            };
+        }
+        Color::Rgb(r, g, b) => (r, g, b),
+    };
+
+    let candidates = [
+        (Color::Black, (0u8, 0u8, 0u8)),
+        (Color::Red, (205, 49, 49)),
+        (Color::Green, (13, 188, 121)),
+        (Color::Yellow, (229, 229, 16)),
+        (Color::Blue, (36, 114, 200)),
+        (Color::Magenta, (188, 63, 188)),
+        (Color::Cyan, (17, 168, 205)),
+        (Color::White, (229, 229, 229)),
+    ];
+    candidates
+        .into_iter()
+        .min_by_key(|(_, (cr, cg, cb))| {
+            let dr = *cr as i32 - r as i32;
+            let dg = *cg as i32 - g as i32;
+            let db = *cb as i32 - b as i32;
+            dr * dr + dg * dg + db * db
+        })
+        .map(|(color, _)| color)
+        .unwrap_or(Color::White)
+}
+
+fn dim_crossterm_color(color: CrosstermColor, amount: f64) -> CrosstermColor {
+    match color {
+        CrosstermColor::Rgb { r, g, b } => {
+            let scale = (1.0 - amount).clamp(0.0, 1.0);
+            CrosstermColor::Rgb {
+                r: (r as f64 * scale).round() as u8,
+                g: (g as f64 * scale).round() as u8,
+                b: (b as f64 * scale).round() as u8,
+            }
+        }
+        color => color,
+    }
+}
+
+fn blend_crossterm_color(
+    start: CrosstermColor,
+    target: CrosstermColor,
+    amount: f64,
+) -> CrosstermColor {
+    let amount = amount.clamp(0.0, 1.0);
+    match (start, target) {
+        (
+            CrosstermColor::Rgb {
+                r: sr,
+                g: sg,
+                b: sb,
+            },
+            CrosstermColor::Rgb {
+                r: tr,
+                g: tg,
+                b: tb,
+            },
+        ) => CrosstermColor::Rgb {
+            r: lerp_u8_local(sr, tr, amount),
+            g: lerp_u8_local(sg, tg, amount),
+            b: lerp_u8_local(sb, tb, amount),
+        },
+        (_, target) => {
+            if amount < 0.5 {
+                start
+            } else {
+                target
+            }
+        }
+    }
+}
+
+fn lerp_u8_local(start: u8, end: u8, progress: f64) -> u8 {
+    (start as f64 + (end as f64 - start as f64) * progress)
+        .round()
+        .clamp(0.0, 255.0) as u8
 }
 
 fn to_crossterm_color(color: Color) -> CrosstermColor {
@@ -2485,6 +3086,213 @@ mod tests {
     }
 
     #[test]
+    fn scanline_dims_target_rows_without_moving_cells() {
+        let theme = Theme::dark();
+        let area = Area::new((0, 0).into(), (4, 3).into());
+        let ctx = VisualCtx::new(
+            1.0,
+            area,
+            std::time::Instant::now(),
+            1,
+            1.0,
+            MotionPolicy::default(),
+            &theme,
+            None,
+            42,
+        );
+        let effect = VisualEffect::scanline().density(0.5).intensity(0.5);
+        let mut target = CellSample::new(0, 0, Stylized::plain('x'));
+        let mut untouched = CellSample::new(0, 1, Stylized::plain('x'));
+        let original = untouched;
+
+        effect.apply(&mut target, &ctx);
+        effect.apply(&mut untouched, &ctx);
+
+        assert_eq!((target.dest_x, target.dest_y), (0.0, 0.0));
+        assert_ne!(target.content.style, Stylized::plain('x').style);
+        assert_eq!(untouched, original);
+    }
+
+    #[test]
+    fn typewriter_reveals_row_major_content() {
+        let hidden = render_widget(
+            &visual(label::<()>("hello"))
+                .progress(0.0)
+                .effect(VisualEffect::typewriter()),
+            5,
+            1,
+        );
+        let shown = render_widget(
+            &visual(label::<()>("hello"))
+                .progress(1.0)
+                .effect(VisualEffect::typewriter()),
+            5,
+            1,
+        );
+
+        assert_eq!(cell_char(&hidden, 0, 0), Some(' '));
+        assert_eq!(cell_char(&shown, 0, 0), Some('h'));
+        assert_eq!(cell_char(&shown, 4, 0), Some('o'));
+    }
+
+    #[test]
+    fn blur_like_in_clears_as_progress_completes() {
+        let theme = Theme::dark();
+        let area = Area::new((0, 0).into(), (5, 1).into());
+        let blurry_ctx = VisualCtx::new(
+            0.0,
+            area,
+            std::time::Instant::now(),
+            1,
+            1.0,
+            MotionPolicy::default(),
+            &theme,
+            None,
+            123,
+        );
+        let clear_ctx = blurry_ctx.with_progress(1.0);
+        let effect = VisualEffect::blur_like()
+            .radius(2.0)
+            .blur_mode(BlurMode::In);
+        let mut blurry = CellSample::new(2, 0, Stylized::plain('x'));
+        let mut clear = CellSample::new(2, 0, Stylized::plain('x'));
+
+        effect.apply(&mut blurry, &blurry_ctx);
+        effect.apply(&mut clear, &clear_ctx);
+
+        assert_ne!(blurry.content.c, Some('x'));
+        assert_eq!(clear.content.c, Some('x'));
+    }
+
+    #[test]
+    fn highlight_sweep_changes_style_without_geometry() {
+        let theme = Theme::dark();
+        let area = Area::new((0, 0).into(), (5, 1).into());
+        let ctx = VisualCtx::new(
+            0.5,
+            area,
+            std::time::Instant::now(),
+            1,
+            1.0,
+            MotionPolicy::default(),
+            &theme,
+            None,
+            123,
+        );
+        let mut sample = CellSample::new(2, 0, Stylized::plain('x'));
+
+        VisualEffect::highlight_sweep()
+            .width(0.3)
+            .color(Color::Rgb(255, 255, 180))
+            .apply(&mut sample, &ctx);
+
+        assert_eq!((sample.dest_x, sample.dest_y), (2.0, 0.0));
+        assert!(sample.content.has_color() || sample.content.has_attr());
+    }
+
+    #[test]
+    fn sparkle_is_seeded_and_density_controlled() {
+        let theme = Theme::dark();
+        let area = Area::new((0, 0).into(), (8, 2).into());
+        let ctx = VisualCtx::new(
+            1.0,
+            area,
+            std::time::Instant::now(),
+            3,
+            1.0,
+            MotionPolicy::default(),
+            &theme,
+            None,
+            42,
+        );
+        let off = VisualEffect::sparkle().density(0.0);
+        let on = VisualEffect::sparkle().density(1.0).with_seed(1);
+        let mut unchanged = CellSample::new(0, 0, Stylized::plain('x'));
+        let original = unchanged;
+        let mut first = CellSample::new(0, 0, Stylized::plain('x'));
+        let mut second = CellSample::new(0, 0, Stylized::plain('x'));
+
+        off.apply(&mut unchanged, &ctx);
+        on.apply(&mut first, &ctx);
+        on.apply(&mut second, &ctx);
+
+        assert_eq!(unchanged, original);
+        assert_eq!(first, second);
+    }
+
+    #[test]
+    fn terminal_capabilities_degrade_truecolor_and_unicode() {
+        let theme = Theme::dark();
+        let area = Area::new((0, 0).into(), (3, 1).into());
+        let ctx = VisualCtx::new(
+            0.5,
+            area,
+            std::time::Instant::now(),
+            1,
+            1.0,
+            MotionPolicy::default(),
+            &theme,
+            None,
+            42,
+        )
+        .with_capabilities(
+            TerminalVisualCapabilities::default()
+                .truecolor(false)
+                .unicode_blocks(false),
+        );
+        let mut color = CellSample::new(1, 0, Stylized::plain('x'));
+        let mut blur = CellSample::new(1, 0, Stylized::plain('x'));
+
+        VisualEffect::gradient(
+            Color::Rgb(255, 128, 0),
+            Color::Rgb(255, 128, 0),
+            GradientDirection::Horizontal,
+        )
+        .apply(&mut color, &ctx);
+        VisualEffect::blur_like().apply(&mut blur, &ctx.with_progress(0.0));
+
+        let foreground = color
+            .content
+            .style
+            .colors
+            .and_then(|colors| colors.foreground)
+            .unwrap();
+        assert!(!matches!(foreground, CrosstermColor::Rgb { .. }));
+        assert!(!matches!(blur.content.c, Some('░' | '▒')));
+    }
+
+    #[test]
+    fn dirty_only_is_used_only_for_static_effects() {
+        let static_profiles = Arc::new(Mutex::new(Vec::<VisualProfile>::new()));
+        let static_sink = Arc::clone(&static_profiles);
+        let static_widget = visual(label::<()>("dirty"))
+            .seed(0xD17)
+            .progress(1.0)
+            .effect(VisualEffect::gradient(
+                Color::Rgb(255, 0, 0),
+                Color::Rgb(255, 0, 0),
+                GradientDirection::Horizontal,
+            ))
+            .profile(move |profile| static_sink.lock().unwrap().push(profile));
+
+        let _ = render_widget(&static_widget, 8, 1);
+        let _ = render_widget(&static_widget, 8, 1);
+        assert!(static_profiles.lock().unwrap()[1].clean_cells_skipped > 0);
+
+        let animated_profiles = Arc::new(Mutex::new(Vec::<VisualProfile>::new()));
+        let animated_sink = Arc::clone(&animated_profiles);
+        let animated_widget = visual(label::<()>("dirty"))
+            .seed(0xD18)
+            .progress(0.5)
+            .effect(VisualEffect::fade_in())
+            .profile(move |profile| animated_sink.lock().unwrap().push(profile));
+
+        let _ = render_widget(&animated_widget, 8, 1);
+        let _ = render_widget(&animated_widget, 8, 1);
+        assert_eq!(animated_profiles.lock().unwrap()[1].clean_cells_skipped, 0);
+    }
+
+    #[test]
     fn reduced_motion_replaces_new_spatial_effects() {
         assert!(matches!(
             VisualEffect::reveal(WipeDirection::LeftToRight).reduced(),
@@ -2502,6 +3310,38 @@ mod tests {
             VisualEffect::glitch().reduced(),
             VisualEffect::Fade { from: 0.0, to: 1.0 }
         ));
+        assert!(matches!(
+            VisualEffect::typewriter().reduced(),
+            VisualEffect::Fade { from: 0.0, to: 1.0 }
+        ));
+        assert!(matches!(
+            VisualEffect::blur_like().reduced(),
+            VisualEffect::Fade { from: 0.0, to: 1.0 }
+        ));
+        assert!(matches!(
+            VisualEffect::sparkle().reduced(),
+            VisualEffect::Fade { from: 0.0, to: 1.0 }
+        ));
+        assert_eq!(
+            VisualEffect::scanline().estimated_cost(),
+            VisualEffectCost::Cheap
+        );
+        assert_eq!(
+            VisualEffect::typewriter().estimated_cost(),
+            VisualEffectCost::Cheap
+        );
+        assert_eq!(
+            VisualEffect::highlight_sweep().estimated_cost(),
+            VisualEffectCost::Cheap
+        );
+        assert_eq!(
+            VisualEffect::blur_like().estimated_cost(),
+            VisualEffectCost::Moderate
+        );
+        assert_eq!(
+            VisualEffect::sparkle().estimated_cost(),
+            VisualEffectCost::Moderate
+        );
     }
 
     fn render_widget(widget: &impl Widget<()>, width: u16, height: u16) -> Buffer {

@@ -26,6 +26,7 @@ use crate::widget::{
 };
 use crate::widgets::text_input::TextInputState;
 use crate::widgets::textarea::TextAreaState;
+use crate::widgets::visual::TerminalVisualCapabilities;
 use crate::WidgetResult;
 
 pub type EventHandler<M> = Box<dyn Fn() -> M>;
@@ -146,6 +147,7 @@ pub struct App<State, M = ()> {
     quit_behavior: QuitBehavior,
     mouse_capture: bool,
     motion_policy: MotionPolicy,
+    visual_capabilities: TerminalVisualCapabilities,
 }
 
 impl<State: std::fmt::Debug, M> std::fmt::Debug for App<State, M> {
@@ -171,6 +173,7 @@ impl<State, M: Clone + std::fmt::Debug + Send + 'static> App<State, M> {
             quit_behavior: QuitBehavior::default(),
             mouse_capture: false,
             motion_policy: MotionPolicy::default(),
+            visual_capabilities: TerminalVisualCapabilities::default(),
         }
     }
 
@@ -193,6 +196,12 @@ impl<State, M: Clone + std::fmt::Debug + Send + 'static> App<State, M> {
     /// Configure global animation behavior.
     pub fn with_motion_policy(mut self, motion_policy: MotionPolicy) -> Self {
         self.motion_policy = motion_policy;
+        self
+    }
+
+    /// Configure terminal capability hints used by visual effects.
+    pub fn with_visual_capabilities(mut self, capabilities: TerminalVisualCapabilities) -> Self {
+        self.visual_capabilities = capabilities;
         self
     }
 
@@ -356,6 +365,7 @@ impl<State, M: Clone + std::fmt::Debug + Send + 'static> App<State, M> {
             quit_behavior,
             mouse_capture,
             motion_policy,
+            visual_capabilities,
         } = self;
 
         let (task_sender, task_receiver) = mpsc::channel();
@@ -398,6 +408,7 @@ impl<State, M: Clone + std::fmt::Debug + Send + 'static> App<State, M> {
             animation_frame: 0,
             render_frame: 0,
             motion_policy,
+            visual_capabilities,
             inline_mode,
             inline_max_height,
             task_sender,
@@ -483,6 +494,7 @@ struct AppRuntime<State, U, V, M> {
     animation_frame: u64,
     render_frame: u64,
     motion_policy: MotionPolicy,
+    visual_capabilities: TerminalVisualCapabilities,
     inline_mode: bool,
     inline_max_height: u16,
     task_sender: Sender<TaskEvent<M>>,
@@ -1328,6 +1340,7 @@ where
             render_now,
             self.render_frame,
             self.motion_policy,
+            self.visual_capabilities,
         );
         tree.render(&mut chunk, &ctx);
         self.render_exiting_visuals(&mut chunk, &ctx, render_now);

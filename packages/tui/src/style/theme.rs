@@ -448,11 +448,10 @@ impl Default for ThemeEffects {
                 VisualEffect::reveal(WipeDirection::LeftToRight).softness(0.08),
             ),
             toast_exit: VisualEffect::dissolve_out(),
-            focus_pulse: VisualEffect::gradient(
-                Color::Rgb(125, 211, 252),
-                Color::Rgb(244, 114, 182),
-                GradientDirection::Horizontal,
-            ),
+            focus_pulse: VisualEffect::highlight_sweep()
+                .color(Color::Rgb(255, 255, 180))
+                .width(0.22)
+                .direction(GradientDirection::Horizontal),
             screen_transition: VisualEffect::reveal(WipeDirection::TopToBottom).softness(0.05),
         }
     }
