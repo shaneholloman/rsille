@@ -53,8 +53,8 @@ fn view(state: &State) -> impl Widget<Msg> {
         .child(
             row::<Msg>()
                 .gap(2)
-                .child(button("Panel").on_click(|| Msg::TogglePanel).animated())
-                .child(button("Toast").on_click(|| Msg::ToggleToast).animated()),
+                .child(button("Panel").on_click(|| Msg::TogglePanel))
+                .child(button("Toast").on_click(|| Msg::ToggleToast)),
         )
         .child(divider())
         .child(presence_area(state))
@@ -63,14 +63,14 @@ fn view(state: &State) -> impl Widget<Msg> {
 
 fn presence_area(state: &State) -> Box<dyn Widget<Msg>> {
     if state.panel_open {
-        return animate(
+        return visual(
             panel::<Msg>()
                 .title("Deployment Window")
                 .padding(Padding::uniform(1))
                 .gap(1)
                 .child(label("Release candidate: rsille-tui"))
                 .child(label(format!("Heartbeat: {}", state.tick)))
-                .child(progress_bar::<Msg>((state.tick % 8) as f64 / 7.0).animated()),
+                .child(progress_bar::<Msg>((state.tick % 8) as f64 / 7.0)),
         )
         .key("deployment-window")
         .layout(AnimationSpec::new(
@@ -88,7 +88,7 @@ fn presence_area(state: &State) -> Box<dyn Widget<Msg>> {
         .into_widget();
     }
 
-    animate(
+    visual(
         panel::<Msg>()
             .title("Deployment Window")
             .padding(Padding::uniform(1))
@@ -101,7 +101,7 @@ fn presence_area(state: &State) -> Box<dyn Widget<Msg>> {
 
 fn toast_slot(state: &State) -> Box<dyn Widget<Msg>> {
     if state.toast_open {
-        return animate(
+        return visual(
             panel::<Msg>()
                 .title("Toast")
                 .padding(Padding::uniform(1))

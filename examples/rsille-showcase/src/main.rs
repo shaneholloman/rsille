@@ -215,7 +215,7 @@ fn header(state: &State) -> impl Widget<Msg> {
                 .variant(ButtonVariant::Secondary)
                 .on_click(|| Msg::TogglePalette),
         )
-        .child(button("Promote").on_click(|| Msg::OpenDialog).animated())
+        .child(button("Promote").on_click(|| Msg::OpenDialog))
 }
 
 fn nav(state: &State) -> impl Widget<Msg> {
@@ -328,14 +328,12 @@ fn control_card(state: &State) -> impl Widget<Msg> {
         .child(
             switch("Live")
                 .checked(state.live)
-                .on_change(Msg::ToggleLive)
-                .animated(),
+                .on_change(Msg::ToggleLive),
         )
         .child(
             switch("Scan")
                 .checked(state.scan)
-                .on_change(Msg::ToggleScan)
-                .animated(),
+                .on_change(Msg::ToggleScan),
         )
         .child(
             select::<Msg>()
@@ -527,7 +525,7 @@ fn promote_dialog(state: &State) -> impl Widget<Msg> {
                         .variant(ButtonVariant::Secondary)
                         .on_click(|| Msg::CloseDialog),
                 )
-                .child(button("Apply").on_click(|| Msg::CloseDialog).animated()),
+                .child(button("Apply").on_click(|| Msg::CloseDialog)),
         )
 }
 
@@ -564,8 +562,7 @@ fn metric_row(name: &str, value: f64, color: Color) -> impl Widget<Msg> {
             progress_bar::<Msg>(value)
                 .width(22)
                 .label(format!("{:>3}%", (value * 100.0).round() as u8))
-                .fill_style(Style::default().fg(color))
-                .animated(),
+                .fill_style(Style::default().fg(color)),
         )
 }
 

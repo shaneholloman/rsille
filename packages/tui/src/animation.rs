@@ -470,48 +470,6 @@ impl Default for AnimationTheme {
     }
 }
 
-/// Named animation slots supplied by [`AnimationTheme`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AnimationSlot {
-    Fast,
-    Normal,
-    Slow,
-    Focus,
-    Layout,
-    Enter,
-    Exit,
-}
-
-impl AnimationTheme {
-    pub fn get(self, slot: AnimationSlot) -> AnimationSpec {
-        match slot {
-            AnimationSlot::Fast => self.fast,
-            AnimationSlot::Normal => self.normal,
-            AnimationSlot::Slow => self.slow,
-            AnimationSlot::Focus => self.focus,
-            AnimationSlot::Layout => self.layout,
-            AnimationSlot::Enter => self.enter,
-            AnimationSlot::Exit => self.exit,
-        }
-    }
-}
-
-/// A widget-level animation declaration.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum AnimationConfig {
-    Theme(AnimationSlot),
-    Custom(AnimationSpec),
-}
-
-impl AnimationConfig {
-    pub fn resolve(self, theme: AnimationTheme) -> AnimationSpec {
-        match self {
-            AnimationConfig::Theme(slot) => theme.get(slot),
-            AnimationConfig::Custom(spec) => spec,
-        }
-    }
-}
-
 /// Floating-point cell area used by layout animations before final rounding.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct AreaF {
@@ -1788,19 +1746,6 @@ mod tests {
             assert!(!ctx.pulse("spinner", Duration::from_millis(80)));
         }
         assert_eq!(store.value(&path, "spinner"), None);
-    }
-
-    #[test]
-    fn animation_config_resolves_theme_slots() {
-        let theme = AnimationTheme {
-            focus: AnimationSpec::new(Duration::from_millis(42), Easing::Linear),
-            ..AnimationTheme::default()
-        };
-
-        assert_eq!(
-            AnimationConfig::Theme(AnimationSlot::Focus).resolve(theme),
-            theme.focus
-        );
     }
 
     #[test]

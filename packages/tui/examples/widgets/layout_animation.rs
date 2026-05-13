@@ -103,9 +103,9 @@ fn view(state: &State) -> impl Widget<Msg> {
         .child(
             row::<Msg>()
                 .gap(2)
-                .child(button("Shuffle").on_click(|| Msg::Shuffle).animated())
-                .child(button("Next").on_click(|| Msg::SelectNext).animated())
-                .child(button("Detail").on_click(|| Msg::ToggleDetail).animated()),
+                .child(button("Shuffle").on_click(|| Msg::Shuffle))
+                .child(button("Next").on_click(|| Msg::SelectNext))
+                .child(button("Detail").on_click(|| Msg::ToggleDetail)),
         )
         .child(divider())
         .child(
@@ -130,7 +130,7 @@ fn job_list(state: &State) -> impl Widget<Msg> {
     list
 }
 
-fn job_row(job: Job, selected: bool, detail_open: bool) -> Animated<Msg> {
+fn job_row(job: Job, selected: bool, detail_open: bool) -> Visual<Msg> {
     let marker = if selected { ">" } else { " " };
     let style = if selected {
         Style::default().fg(job.color).bold()
@@ -145,7 +145,7 @@ fn job_row(job: Job, selected: bool, detail_open: bool) -> Animated<Msg> {
         .child(label(format!("{:<16}", job.title)).style(style))
         .child(label(job.status).fg(job.color));
 
-    let row = animate(row_widget)
+    let row = visual(row_widget)
         .key(job.id)
         .layout_transition(LayoutTransition::position(spec));
 
@@ -161,14 +161,14 @@ fn detail_stage(state: &State) -> Box<dyn Widget<Msg>> {
     let job = JOBS[state.selected];
 
     if state.detail_open {
-        return animate(
+        return visual(
             panel::<Msg>()
                 .title("Active Job")
                 .padding(Padding::uniform(1))
                 .gap(1)
                 .child(label(job.title).fg(job.color).bold())
                 .child(label(format!("State: {}", job.status)))
-                .child(progress_bar::<Msg>((state.step % 10) as f64 / 9.0).animated()),
+                .child(progress_bar::<Msg>((state.step % 10) as f64 / 9.0)),
         )
         .key("active-detail")
         .shared_transition("active-job", LayoutTransition::size_and_position(spec))

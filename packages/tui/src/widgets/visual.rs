@@ -6,9 +6,12 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use render::area::Area;
+
 use crate::animation::{
-    AnimationSpec, Direction as AnimationDirection, Easing, InitialAnimation, Presence, Repeat,
-    Timeline, Transition, TransitionEffect,
+    AnimationSpec, ClipMode, Direction as AnimationDirection, Easing, HitTestMode,
+    InitialAnimation, LayoutTransition, Presence, Repeat, SharedTransition, Timeline,
+    TimelineFrame, Transition, TransitionEffect,
 };
 use crate::focus::FocusConfig;
 use crate::layout::Constraints;
@@ -24,7 +27,7 @@ pub use crate::visual_engine::{
     VisualAnchor, VisualConfig, VisualCtx, VisualDegradation, VisualEffect, VisualEffectCost,
     VisualPerformanceConfig, VisualProfile, WaveAxis, WipeDirection, WipeMode,
 };
-use crate::widget::{IntoWidget, RenderCtx, Widget, WidgetKey};
+use crate::widget::{hit_area_for, IntoWidget, RenderCtx, Widget, WidgetKey};
 
 type ProfileHook = Arc<dyn Fn(VisualProfile) + Send + Sync + 'static>;
 
@@ -45,6 +48,9 @@ pub struct Visual<M = ()> {
     config: VisualConfig,
     profile_hook: Option<ProfileHook>,
     effect_preset: Option<String>,
+    layout_transition: Option<LayoutTransition>,
+    shared_transition: Option<SharedTransition>,
+    hit_test_mode: HitTestMode,
     presence: Presence,
     pub(crate) enter_effect: Option<LifecycleVisualEffect>,
     pub(crate) exit_effect: Option<LifecycleVisualEffect>,
@@ -61,6 +67,9 @@ impl<M> std::fmt::Debug for Visual<M> {
             .field("config", &self.config)
             .field("profile_hook", &self.profile_hook.is_some())
             .field("effect_preset", &self.effect_preset)
+            .field("layout_transition", &self.layout_transition)
+            .field("shared_transition", &self.shared_transition)
+            .field("hit_test_mode", &self.hit_test_mode)
             .field("presence", &self.presence)
             .field("enter_effect", &self.enter_effect)
             .field("exit_effect", &self.exit_effect)
@@ -83,6 +92,60 @@ impl LifecycleVisualEffect {
     }
 }
 
+/// Input accepted by [`Visual::enter`].
+pub trait IntoVisualEnter {
+    fn apply_to<M>(self, visual: Visual<M>) -> Visual<M>;
+}
+
+/// Input accepted by [`Visual::exit`].
+pub trait IntoVisualExit {
+    fn apply_to<M>(self, visual: Visual<M>) -> Visual<M>;
+}
+
+impl IntoVisualEnter for VisualEffect {
+    fn apply_to<M>(self, mut visual: Visual<M>) -> Visual<M> {
+        visual.enter_effect = Some(LifecycleVisualEffect::Effect(self));
+        visual.presence = visual.presence.enter(visual_enter_timeline());
+        visual.presence.initial = InitialAnimation::Play;
+        visual
+    }
+}
+
+impl IntoVisualExit for VisualEffect {
+    fn apply_to<M>(self, mut visual: Visual<M>) -> Visual<M> {
+        visual.exit_effect = Some(LifecycleVisualEffect::Effect(self));
+        visual.presence = visual.presence.exit(visual_exit_timeline());
+        visual
+    }
+}
+
+impl IntoVisualEnter for Transition {
+    fn apply_to<M>(self, visual: Visual<M>) -> Visual<M> {
+        IntoVisualEnter::apply_to(Timeline::single(self), visual)
+    }
+}
+
+impl IntoVisualExit for Transition {
+    fn apply_to<M>(self, visual: Visual<M>) -> Visual<M> {
+        IntoVisualExit::apply_to(Timeline::single(self), visual)
+    }
+}
+
+impl IntoVisualEnter for Timeline {
+    fn apply_to<M>(self, mut visual: Visual<M>) -> Visual<M> {
+        visual.presence = visual.presence.enter(self);
+        visual.presence.initial = InitialAnimation::Play;
+        visual
+    }
+}
+
+impl IntoVisualExit for Timeline {
+    fn apply_to<M>(self, mut visual: Visual<M>) -> Visual<M> {
+        visual.presence = visual.presence.exit(self);
+        visual
+    }
+}
+
 impl<M> Visual<M> {
     pub fn new(child: impl IntoWidget<M>) -> Self {
         Self {
@@ -96,6 +159,9 @@ impl<M> Visual<M> {
             config: VisualConfig::default(),
             profile_hook: None,
             effect_preset: None,
+            layout_transition: None,
+            shared_transition: None,
+            hit_test_mode: HitTestMode::Target,
             presence: Presence::default(),
             enter_effect: None,
             exit_effect: None,
@@ -254,19 +320,75 @@ impl<M> Visual<M> {
         self
     }
 
-    /// Play a visual effect automatically when this widget first appears.
-    pub fn enter(mut self, effect: VisualEffect) -> Self {
-        self.enter_effect = Some(LifecycleVisualEffect::Effect(effect));
-        self.presence = self.presence.enter(visual_enter_timeline());
-        self.presence.initial = InitialAnimation::Play;
+    /// Animate this wrapper's layout area when its parent or root target moves
+    /// or changes size.
+    pub fn layout(mut self, spec: AnimationSpec) -> Self {
+        let transition = LayoutTransition::size_and_position(spec).hit_test(self.hit_test_mode);
+        self.layout_transition = Some(transition);
+        if let Some(shared) = self.shared_transition.as_mut() {
+            shared.layout = transition;
+        }
         self
     }
 
-    /// Play a visual effect automatically after this widget leaves the tree.
-    pub fn exit(mut self, effect: VisualEffect) -> Self {
-        self.exit_effect = Some(LifecycleVisualEffect::Effect(effect));
-        self.presence = self.presence.exit(visual_exit_timeline());
+    /// Use a fully configured layout transition for this wrapper.
+    pub fn layout_transition(mut self, transition: LayoutTransition) -> Self {
+        self.hit_test_mode = transition.hit_test;
+        self.layout_transition = Some(transition);
+        if let Some(shared) = self.shared_transition.as_mut() {
+            shared.layout = transition;
+        }
         self
+    }
+
+    /// Join this wrapper to a shared layout animation by stable id.
+    pub fn shared(mut self, id: impl Into<String>) -> Self {
+        self.shared_transition = Some(SharedTransition::new(
+            id,
+            self.layout_transition.unwrap_or_else(|| {
+                LayoutTransition::size_and_position(AnimationSpec::normal())
+                    .hit_test(self.hit_test_mode)
+            }),
+        ));
+        self
+    }
+
+    /// Join this wrapper to a shared layout animation with a custom transition.
+    pub fn shared_transition(
+        mut self,
+        id: impl Into<String>,
+        transition: LayoutTransition,
+    ) -> Self {
+        self.hit_test_mode = transition.hit_test;
+        self.shared_transition = Some(SharedTransition::new(id, transition));
+        self
+    }
+
+    /// Choose which geometry should receive pointer events while layout
+    /// animation is active.
+    pub fn hit_test_mode(mut self, mode: HitTestMode) -> Self {
+        self.hit_test_mode = mode;
+        if let Some(transition) = self.layout_transition.as_mut() {
+            transition.hit_test = mode;
+        }
+        if let Some(shared) = self.shared_transition.as_mut() {
+            shared.layout.hit_test = mode;
+        }
+        self
+    }
+
+    pub fn hit_test(self, mode: HitTestMode) -> Self {
+        self.hit_test_mode(mode)
+    }
+
+    /// Play a visual effect automatically when this widget first appears.
+    pub fn enter(self, enter: impl IntoVisualEnter) -> Self {
+        enter.apply_to(self)
+    }
+
+    /// Play a visual effect automatically after this widget leaves the tree.
+    pub fn exit(self, exit: impl IntoVisualExit) -> Self {
+        exit.apply_to(self)
     }
 
     /// Resolve the enter effect from the active theme during rendering.
@@ -331,6 +453,18 @@ impl<M> Visual<M> {
         ctx.track_timeline(channel, timeline, false)
     }
 
+    fn enter_frames(&self, ctx: &RenderCtx) -> Vec<TimelineFrame> {
+        let Some(timeline) = self.presence.enter.clone() else {
+            return Vec::new();
+        };
+
+        if self.presence.initial == InitialAnimation::Skip {
+            return Vec::new();
+        }
+
+        ctx.track_timeline("enter", timeline, false)
+    }
+
     fn resolve_effect_groups(&self, ctx: &RenderCtx) -> Vec<ResolvedEffectGroup> {
         if ctx.is_exit_render() {
             let Some(effect) = self
@@ -367,27 +501,80 @@ impl<M> Visual<M> {
 
         groups
     }
-}
 
-impl<M> Widget<M> for Visual<M> {
-    fn render(&self, chunk: &mut render::chunk::Chunk, ctx: &RenderCtx) {
+    fn render_child(
+        &self,
+        chunk: &mut render::chunk::Chunk,
+        ctx: &RenderCtx,
+        hit_area: Option<Area>,
+    ) {
+        let child_ctx = ctx
+            .child_ctx(WidgetKey::for_child(0, self.child.as_ref()))
+            .with_hit_area(hit_area);
+        self.render_visual_content(chunk, ctx, &child_ctx);
+    }
+
+    fn render_with_area(
+        &self,
+        chunk: &mut render::chunk::Chunk,
+        ctx: &RenderCtx,
+        area: Area,
+        hit_area: Option<Area>,
+    ) {
+        if area.width() == 0 || area.height() == 0 {
+            return;
+        }
+
+        if let Ok(mut child_chunk) = chunk.from_area(area) {
+            self.render_child(&mut child_chunk, ctx, hit_area);
+        }
+    }
+
+    fn render_area_with_clip(
+        &self,
+        chunk: &mut render::chunk::Chunk,
+        ctx: &RenderCtx,
+        area: Area,
+        clip: ClipMode,
+        target: Area,
+        hit_area: Option<Area>,
+    ) {
+        match clip {
+            ClipMode::None => self.render_with_area(chunk, ctx, area, hit_area),
+            ClipMode::ClipToAnimatedBounds => {
+                let _ = chunk.with_clip(area, |child_chunk| {
+                    self.render_child(child_chunk, ctx, hit_area)
+                });
+            }
+            ClipMode::ClipToTargetBounds => {
+                if let Some(clipped) = area.clamp_to(&target) {
+                    let _ = chunk.with_clip(clipped, |child_chunk| {
+                        self.render_child(child_chunk, ctx, hit_area)
+                    });
+                }
+            }
+        }
+    }
+
+    fn render_visual_content(
+        &self,
+        chunk: &mut render::chunk::Chunk,
+        ctx: &RenderCtx,
+        child_ctx: &RenderCtx,
+    ) {
         let area = chunk.area();
         if area.width() == 0 || area.height() == 0 {
             return;
         }
 
-        ctx.record_bounds(area);
-
         if !self.has_visual_work() {
-            let child_ctx = ctx.child_ctx(WidgetKey::for_child(0, self.child.as_ref()));
-            self.child.render(chunk, &child_ctx);
+            self.child.render(chunk, child_ctx);
             return;
         }
 
         let seed = self
             .seed
             .unwrap_or_else(|| stable_seed(&self.channel, self.widget_key.as_deref()));
-        let child_ctx = ctx.child_ctx(WidgetKey::for_child(0, self.child.as_ref()));
         let resolved_config = self.resolve_config(ctx.theme());
         let profile_enabled = self.profile_hook.is_some();
         let mut offscreen_render_time = Duration::ZERO;
@@ -397,7 +584,7 @@ impl<M> Widget<M> for Visual<M> {
             Some(seed),
             |offscreen_chunk| {
                 let started = profile_enabled.then(Instant::now);
-                self.child.render(offscreen_chunk, &child_ctx);
+                self.child.render(offscreen_chunk, child_ctx);
                 if let Some(started) = started {
                     offscreen_render_time = started.elapsed();
                 }
@@ -436,6 +623,62 @@ impl<M> Widget<M> for Visual<M> {
             hook(report.into_profile(offscreen_render_time));
         }
     }
+}
+
+impl<M> Widget<M> for Visual<M> {
+    fn render(&self, chunk: &mut render::chunk::Chunk, ctx: &RenderCtx) {
+        let target = ctx.layout_target().unwrap_or_else(|| chunk.area());
+        if target.width() == 0 || target.height() == 0 {
+            return;
+        }
+
+        ctx.record_bounds(target);
+
+        let (mut display_area, clip, hit_test_mode) =
+            if let Some(shared) = self.shared_transition.as_ref() {
+                if ctx.layout_is_managed() {
+                    (chunk.area(), shared.layout.clip, shared.layout.hit_test)
+                } else {
+                    (
+                        ctx.track_shared_layout(&shared.id, target, shared.layout),
+                        shared.layout.clip,
+                        shared.layout.hit_test,
+                    )
+                }
+            } else if let Some(transition) = self.layout_transition {
+                if ctx.layout_is_managed() {
+                    (chunk.area(), transition.clip, transition.hit_test)
+                } else {
+                    (
+                        ctx.track_layout("layout", target, transition),
+                        transition.clip,
+                        transition.hit_test,
+                    )
+                }
+            } else {
+                (target, ClipMode::None, self.hit_test_mode)
+            };
+
+        for frame in self.enter_frames(ctx) {
+            display_area = apply_enter_effect(display_area, &frame);
+        }
+
+        let hit_area = hit_area_for(hit_test_mode, target, display_area);
+        ctx.record_hit_bounds(target, display_area, hit_test_mode);
+        self.render_area_with_clip(chunk, ctx, display_area, clip, target, hit_area);
+    }
+
+    fn layout_transition(&self) -> Option<LayoutTransition> {
+        self.layout_transition
+    }
+
+    fn shared_transition(&self) -> Option<&SharedTransition> {
+        self.shared_transition.as_ref()
+    }
+
+    fn hit_test_mode(&self) -> HitTestMode {
+        self.hit_test_mode
+    }
 
     fn constraints(&self) -> Constraints {
         self.child.constraints()
@@ -460,6 +703,33 @@ impl<M> Widget<M> for Visual<M> {
             None
         }
     }
+}
+
+fn apply_enter_effect(area: Area, frame: &TimelineFrame) -> Area {
+    match frame.transition.effect {
+        TransitionEffect::Collapse | TransitionEffect::Expand => {
+            vertical_reveal(area, frame.progress)
+        }
+        TransitionEffect::ScaleFromCenter => scale_from_center(area, frame.progress),
+        TransitionEffect::Layout(_) | TransitionEffect::Fade | TransitionEffect::BorderEmphasis => {
+            area
+        }
+    }
+}
+
+fn vertical_reveal(area: Area, progress: f64) -> Area {
+    let height = ((area.height() as f64) * progress.clamp(0.0, 1.0)).round() as u16;
+    Area::new(area.pos(), (area.width(), height).into())
+}
+
+fn scale_from_center(area: Area, progress: f64) -> Area {
+    let progress = progress.clamp(0.0, 1.0);
+    let width = ((area.width() as f64) * progress).round() as u16;
+    let height = ((area.height() as f64) * progress).round() as u16;
+    let x = area.x() + area.width().saturating_sub(width) / 2;
+    let y = area.y() + area.height().saturating_sub(height) / 2;
+
+    Area::new((x, y).into(), (width, height).into())
 }
 
 /// Convenience for a looping visual animation.

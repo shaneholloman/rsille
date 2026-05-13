@@ -2,7 +2,6 @@
 
 use unicode_width::UnicodeWidthStr;
 
-use crate::animation::{AnimationConfig, AnimationCtx, AnimationSlot, AnimationSpec};
 use crate::event::{Event, KeyCode};
 use crate::focus::FocusConfig;
 use crate::layout::Constraints;
@@ -16,7 +15,6 @@ pub struct Switch<M = ()> {
     disabled: bool,
     custom_style: Option<Style>,
     custom_focus_style: Option<Style>,
-    animation: Option<AnimationConfig>,
     on_change: Option<Box<dyn Fn(bool) -> M>>,
     widget_key: Option<String>,
 }
@@ -40,7 +38,6 @@ impl<M> Switch<M> {
             disabled: false,
             custom_style: None,
             custom_focus_style: None,
-            animation: None,
             on_change: None,
             widget_key: None,
         }
@@ -71,16 +68,6 @@ impl<M> Switch<M> {
         self
     }
 
-    pub fn animated(mut self) -> Self {
-        self.animation = Some(AnimationConfig::Theme(AnimationSlot::Normal));
-        self
-    }
-
-    pub fn animation(mut self, spec: AnimationSpec) -> Self {
-        self.animation = Some(AnimationConfig::Custom(spec));
-        self
-    }
-
     pub fn on_change<F>(mut self, handler: F) -> Self
     where
         F: Fn(bool) -> M + 'static,
@@ -98,22 +85,11 @@ impl<M> Widget<M> for Switch<M> {
         }
 
         let theme = ctx.theme();
-        let target_value = if self.checked { 1.0 } else { 0.0 };
-        let animated_value = self
-            .animation
-            .and_then(|_| ctx.animation_value("checked"))
-            .unwrap_or(target_value)
-            .clamp(0.0, 1.0);
-        let visual_checked = if self.animation.is_some() {
-            animated_value >= 0.5
-        } else {
-            self.checked
-        };
         let base_style = if self.disabled {
             theme.styles.interactive_disabled
         } else if ctx.is_focused() {
             theme.styles.interactive_focused
-        } else if visual_checked {
+        } else if self.checked {
             theme.styles.selected
         } else {
             theme.styles.interactive
@@ -130,19 +106,7 @@ impl<M> Widget<M> for Switch<M> {
         }
         .to_render_style();
 
-        let track = if self.animation.is_none() {
-            if self.checked {
-                "[ ON]"
-            } else {
-                "[OFF]"
-            }
-        } else if animated_value >= 0.85 {
-            "[ ON]"
-        } else if animated_value <= 0.15 {
-            "[OFF]"
-        } else {
-            "[ --]"
-        };
+        let track = if self.checked { "[ ON]" } else { "[OFF]" };
         let text = if self.label.is_empty() {
             track.to_owned()
         } else {
@@ -150,16 +114,6 @@ impl<M> Widget<M> for Switch<M> {
         };
         let display = truncate_to_width(&text, area.width() as usize);
         let _ = chunk.set_string(0, 0, &display, style);
-    }
-
-    fn animate(&self, ctx: &mut AnimationCtx) -> bool {
-        let Some(animation) = self.animation else {
-            return false;
-        };
-
-        let target = if self.checked { 1.0 } else { 0.0 };
-        let spec = animation.resolve(ctx.animation_theme());
-        ctx.track_value("checked", target, spec)
     }
 
     fn handle_event(&self, event: &Event, ctx: &mut EventCtx<M>) {

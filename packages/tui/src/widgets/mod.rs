@@ -64,7 +64,8 @@ pub use textarea::{textarea, TextArea, TextAreaState, TextAreaVariant};
 pub use tree::{tree, Tree, TreeItem, TreeState};
 pub use visual::{
     looping_visual_spec, visual, BlurMode, CellEffect, CellSample, CustomCellEffect, DissolveMode,
-    GradientDirection, GradientTarget, LargeAreaPolicy, StaggerMode, TerminalVisualCapabilities,
-    TypewriterMode, Visual, VisualAnchor, VisualConfig, VisualCtx, VisualDegradation, VisualEffect,
-    VisualEffectCost, VisualPerformanceConfig, VisualProfile, WaveAxis, WipeDirection, WipeMode,
+    GradientDirection, GradientTarget, IntoVisualEnter, IntoVisualExit, LargeAreaPolicy,
+    StaggerMode, TerminalVisualCapabilities, TypewriterMode, Visual, VisualAnchor, VisualConfig,
+    VisualCtx, VisualDegradation, VisualEffect, VisualEffectCost, VisualPerformanceConfig,
+    VisualProfile, WaveAxis, WipeDirection, WipeMode,
 };

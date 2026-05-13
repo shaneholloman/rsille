@@ -1,10 +1,9 @@
 //! Prelude — import everything you need with `use tui::prelude::*;`
 
 pub use crate::animation::{
-    AnimationConfig, AnimationSlot, AnimationSpec, AnimationTheme, AreaF, ClipMode,
-    Direction as AnimationDirection, Easing, HitTestMode, InitialAnimation, LayoutSnapshot,
-    LayoutTransition, MotionPolicy, Presence, Repeat, SharedTransition, Timeline, Transition,
-    TransitionEffect,
+    AnimationSpec, AnimationTheme, AreaF, ClipMode, Direction as AnimationDirection, Easing,
+    HitTestMode, InitialAnimation, LayoutSnapshot, LayoutTransition, MotionPolicy, Presence,
+    Repeat, SharedTransition, Timeline, Transition, TransitionEffect,
 };
 pub use crate::app::{App, FrameInfo, QuitBehavior};
 pub use crate::effect::{
@@ -44,12 +43,13 @@ pub use crate::widgets::{
     DataTableNavigationMode, DataTableRow, DataTableSort, DataTableSortDirection, DataTableState,
     Dialog, DiffViewer, DissolveMode, Divider, DividerDirection, DividerTextPosition,
     DividerVariant, FileExplorer, FileExplorerItem, FileExplorerItemKind, FileExplorerState,
-    GradientDirection, GradientTarget, Label, LargeAreaPolicy, List, ListItem, ListState,
-    LoadingIndicator, LogLevel, LogLine, LogViewer, MarkdownViewer, Menu, MenuItem, MenuState,
-    Panel, ProgressBar, RadioGroup, RadioGroupState, RadioOption, Select, SelectOption,
-    SelectSearchMode, SelectState, SelectionMode, SelectionState, Spacer, StaggerMode, Switch,
-    TabItem, TableAlign, Tabs, TabsState, TerminalVisualCapabilities, TextArea, TextAreaState,
-    TextAreaVariant, TextInput, TextInputVariant, Tree, TreeItem, TreeState, TypewriterMode,
-    Visual, VisualAnchor, VisualConfig, VisualCtx, VisualDegradation, VisualEffect,
-    VisualEffectCost, VisualPerformanceConfig, VisualProfile, WaveAxis, WipeDirection, WipeMode,
+    GradientDirection, GradientTarget, IntoVisualEnter, IntoVisualExit, Label, LargeAreaPolicy,
+    List, ListItem, ListState, LoadingIndicator, LogLevel, LogLine, LogViewer, MarkdownViewer,
+    Menu, MenuItem, MenuState, Panel, ProgressBar, RadioGroup, RadioGroupState, RadioOption,
+    Select, SelectOption, SelectSearchMode, SelectState, SelectionMode, SelectionState, Spacer,
+    StaggerMode, Switch, TabItem, TableAlign, Tabs, TabsState, TerminalVisualCapabilities,
+    TextArea, TextAreaState, TextAreaVariant, TextInput, TextInputVariant, Tree, TreeItem,
+    TreeState, TypewriterMode, Visual, VisualAnchor, VisualConfig, VisualCtx, VisualDegradation,
+    VisualEffect, VisualEffectCost, VisualPerformanceConfig, VisualProfile, WaveAxis,
+    WipeDirection, WipeMode,
 };

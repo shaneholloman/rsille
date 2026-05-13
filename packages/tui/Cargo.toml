@@ -60,10 +60,6 @@ name = "controls"
 path = "examples/widgets/controls.rs"
 
 [[example]]
-name = "animation"
-path = "examples/widgets/animation.rs"
-
-[[example]]
 name = "layout_animation"
 path = "examples/widgets/layout_animation.rs"
 

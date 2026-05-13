@@ -1,6 +1,5 @@
 //! Button widget — focusable interactive button
 
-use crate::animation::{AnimationConfig, AnimationCtx, AnimationSlot, AnimationSpec};
 use crate::event::{Event, KeyCode};
 use crate::focus::FocusConfig;
 use crate::layout::Constraints;
@@ -25,7 +24,6 @@ pub struct Button<M = ()> {
     label: String,
     variant: ButtonVariant,
     disabled: bool,
-    animation: Option<AnimationConfig>,
     on_click: Option<Box<dyn Fn() -> M>>,
     widget_key: Option<String>,
 }
@@ -47,7 +45,6 @@ impl<M> Button<M> {
             label: label.into(),
             variant: ButtonVariant::default(),
             disabled: false,
-            animation: None,
             on_click: None,
             widget_key: None,
         }
@@ -65,16 +62,6 @@ impl<M> Button<M> {
 
     pub fn disabled(mut self, disabled: bool) -> Self {
         self.disabled = disabled;
-        self
-    }
-
-    pub fn animated(mut self) -> Self {
-        self.animation = Some(AnimationConfig::Theme(AnimationSlot::Focus));
-        self
-    }
-
-    pub fn animation(mut self, spec: AnimationSpec) -> Self {
-        self.animation = Some(AnimationConfig::Custom(spec));
         self
     }
 
@@ -138,19 +125,7 @@ impl<M> Widget<M> for Button<M> {
             return;
         }
 
-        let focus_target = if ctx.is_focused() { 1.0 } else { 0.0 };
-        let focus_amount = self
-            .animation
-            .and_then(|_| ctx.animation_value("focus"))
-            .unwrap_or(focus_target)
-            .clamp(0.0, 1.0);
-        let is_focused = if self.disabled {
-            false
-        } else if self.animation.is_some() {
-            focus_amount >= 0.5
-        } else {
-            ctx.is_focused()
-        };
+        let is_focused = !self.disabled && ctx.is_focused();
         let theme = ctx.theme();
         let style = self.compute_style(theme, is_focused);
         let render_style = style.to_render_style();
@@ -199,20 +174,6 @@ impl<M> Widget<M> for Button<M> {
         if is_focused {
             render_focus_markers(chunk, self.variant, text_y, render_style);
         }
-    }
-
-    fn animate(&self, ctx: &mut AnimationCtx) -> bool {
-        let Some(animation) = self.animation else {
-            return false;
-        };
-
-        let target = if !self.disabled && ctx.is_focused() {
-            1.0
-        } else {
-            0.0
-        };
-        let spec = animation.resolve(ctx.animation_theme());
-        ctx.track_value("focus", target, spec)
     }
 
     fn handle_event(&self, event: &Event, ctx: &mut EventCtx<M>) {

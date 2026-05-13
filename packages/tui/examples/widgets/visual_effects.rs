@@ -137,7 +137,7 @@ fn view(state: &State) -> impl Widget<Msg> {
         .child(
             row::<Msg>()
                 .gap(2)
-                .child(button("Next effect").on_click(|| Msg::Next).animated())
+                .child(button("Next effect").on_click(|| Msg::Next))
                 .child(label(format!(
                     "{:<11} {:>3}%  {}",
                     MODES[state.mode].name,
@@ -276,7 +276,7 @@ fn stage_body(title: &'static str, state: &State, wide: bool) -> impl Widget<Msg
         .gap(1)
         .child(label("Release train").fg(Color::Cyan).bold())
         .child(label(format!("mode: {}", MODES[state.mode].name)))
-        .child(progress_bar::<Msg>(state.progress).animated())
+        .child(progress_bar::<Msg>(state.progress))
         .child(
             row::<Msg>()
                 .gap(2)
