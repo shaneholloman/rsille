@@ -12,6 +12,7 @@ struct Palette {
     info: Color,
     success: Color,
     warning: Color,
+    action_focus_foreground: Color,
     text: Color,
     text_muted: Color,
     background: Color,
@@ -23,6 +24,14 @@ struct Palette {
     border: Color,
     focus_ring: Color,
     focus_background: Color,
+    selected_foreground: Color,
+    selected_background: Color,
+    selected_focused_foreground: Color,
+    selected_focused_background: Color,
+    active_foreground: Color,
+    active_background: Color,
+    active_focused_foreground: Color,
+    active_focused_background: Color,
     overlay_backdrop: Color,
     scrollbar_track: Color,
     scrollbar_thumb: Color,
@@ -31,26 +40,35 @@ struct Palette {
 impl Palette {
     fn dark() -> Self {
         Self {
-            primary: Color::Rgb(99, 102, 241),
-            secondary: Color::Rgb(139, 92, 246),
-            danger: Color::Rgb(239, 68, 68),
-            info: Color::Rgb(56, 189, 248),
-            success: Color::Rgb(34, 197, 94),
-            warning: Color::Rgb(245, 158, 11),
-            text: Color::Rgb(229, 229, 231),
+            primary: Color::Rgb(96, 165, 250),
+            secondary: Color::Rgb(168, 85, 247),
+            danger: Color::Rgb(248, 113, 113),
+            info: Color::Rgb(34, 211, 238),
+            success: Color::Rgb(74, 222, 128),
+            warning: Color::Rgb(251, 191, 36),
+            action_focus_foreground: Color::Rgb(24, 24, 27),
+            text: Color::Rgb(244, 244, 245),
             text_muted: Color::Rgb(161, 161, 170),
             background: Color::Rgb(24, 24, 27),
             surface: Color::Rgb(39, 39, 42),
-            surface_elevated: Color::Rgb(49, 49, 56),
-            surface_modal: Color::Rgb(54, 54, 61),
-            surface_popup: Color::Rgb(44, 44, 50),
+            surface_elevated: Color::Rgb(55, 55, 61),
+            surface_modal: Color::Rgb(63, 63, 70),
+            surface_popup: Color::Rgb(49, 49, 56),
             surface_tooltip: Color::Rgb(17, 24, 39),
-            border: Color::Rgb(63, 63, 70),
-            focus_ring: Color::Rgb(129, 140, 248),
-            focus_background: Color::Rgb(49, 46, 129),
+            border: Color::Rgb(82, 82, 91),
+            focus_ring: Color::Rgb(147, 197, 253),
+            focus_background: Color::Rgb(30, 64, 175),
+            selected_foreground: Color::White,
+            selected_background: Color::Rgb(37, 99, 235),
+            selected_focused_foreground: Color::White,
+            selected_focused_background: Color::Rgb(59, 130, 246),
+            active_foreground: Color::Rgb(244, 244, 245),
+            active_background: Color::Rgb(63, 63, 70),
+            active_focused_foreground: Color::White,
+            active_focused_background: Color::Rgb(37, 99, 235),
             overlay_backdrop: Color::Rgb(9, 9, 11),
             scrollbar_track: Color::Rgb(63, 63, 70),
-            scrollbar_thumb: Color::Rgb(129, 140, 248),
+            scrollbar_thumb: Color::Rgb(96, 165, 250),
         }
     }
 
@@ -62,6 +80,7 @@ impl Palette {
             info: Color::Rgb(2, 132, 199),
             success: Color::Rgb(22, 163, 74),
             warning: Color::Rgb(217, 119, 6),
+            action_focus_foreground: Color::Rgb(24, 24, 27),
             text: Color::Rgb(24, 24, 27),
             text_muted: Color::Rgb(113, 113, 122),
             background: Color::Rgb(250, 250, 250),
@@ -73,9 +92,119 @@ impl Palette {
             border: Color::Rgb(212, 212, 216),
             focus_ring: Color::Rgb(67, 56, 202),
             focus_background: Color::Rgb(224, 231, 255),
+            selected_foreground: Color::White,
+            selected_background: Color::Rgb(79, 70, 229),
+            selected_focused_foreground: Color::White,
+            selected_focused_background: Color::Rgb(67, 56, 202),
+            active_foreground: Color::Rgb(24, 24, 27),
+            active_background: Color::Rgb(224, 231, 255),
+            active_focused_foreground: Color::White,
+            active_focused_background: Color::Rgb(79, 70, 229),
             overlay_backdrop: Color::Rgb(228, 228, 231),
             scrollbar_track: Color::Rgb(212, 212, 216),
             scrollbar_thumb: Color::Rgb(79, 70, 229),
+        }
+    }
+
+    fn one_dark() -> Self {
+        Self {
+            primary: Color::Rgb(97, 175, 239),
+            secondary: Color::Rgb(198, 120, 221),
+            danger: Color::Rgb(224, 108, 117),
+            info: Color::Rgb(86, 182, 194),
+            success: Color::Rgb(152, 195, 121),
+            warning: Color::Rgb(229, 192, 123),
+            action_focus_foreground: Color::Rgb(40, 44, 52),
+            text: Color::Rgb(171, 178, 191),
+            text_muted: Color::Rgb(130, 137, 151),
+            background: Color::Rgb(40, 44, 52),
+            surface: Color::Rgb(44, 49, 60),
+            surface_elevated: Color::Rgb(53, 59, 69),
+            surface_modal: Color::Rgb(62, 68, 81),
+            surface_popup: Color::Rgb(49, 54, 64),
+            surface_tooltip: Color::Rgb(33, 37, 43),
+            border: Color::Rgb(92, 99, 112),
+            focus_ring: Color::Rgb(97, 175, 239),
+            focus_background: Color::Rgb(49, 88, 120),
+            selected_foreground: Color::Rgb(40, 44, 52),
+            selected_background: Color::Rgb(97, 175, 239),
+            selected_focused_foreground: Color::Rgb(40, 44, 52),
+            selected_focused_background: Color::Rgb(86, 182, 194),
+            active_foreground: Color::Rgb(229, 232, 239),
+            active_background: Color::Rgb(62, 68, 81),
+            active_focused_foreground: Color::Rgb(40, 44, 52),
+            active_focused_background: Color::Rgb(97, 175, 239),
+            overlay_backdrop: Color::Rgb(33, 37, 43),
+            scrollbar_track: Color::Rgb(62, 68, 81),
+            scrollbar_thumb: Color::Rgb(97, 175, 239),
+        }
+    }
+
+    fn dracula() -> Self {
+        Self {
+            primary: Color::Rgb(189, 147, 249),
+            secondary: Color::Rgb(255, 121, 198),
+            danger: Color::Rgb(255, 85, 85),
+            info: Color::Rgb(139, 233, 253),
+            success: Color::Rgb(80, 250, 123),
+            warning: Color::Rgb(241, 250, 140),
+            action_focus_foreground: Color::Rgb(40, 42, 54),
+            text: Color::Rgb(248, 248, 242),
+            text_muted: Color::Rgb(189, 147, 249),
+            background: Color::Rgb(40, 42, 54),
+            surface: Color::Rgb(48, 50, 65),
+            surface_elevated: Color::Rgb(68, 71, 90),
+            surface_modal: Color::Rgb(73, 77, 100),
+            surface_popup: Color::Rgb(56, 59, 76),
+            surface_tooltip: Color::Rgb(25, 26, 34),
+            border: Color::Rgb(98, 114, 164),
+            focus_ring: Color::Rgb(139, 233, 253),
+            focus_background: Color::Rgb(68, 71, 90),
+            selected_foreground: Color::Rgb(40, 42, 54),
+            selected_background: Color::Rgb(189, 147, 249),
+            selected_focused_foreground: Color::Rgb(40, 42, 54),
+            selected_focused_background: Color::Rgb(139, 233, 253),
+            active_foreground: Color::Rgb(248, 248, 242),
+            active_background: Color::Rgb(68, 71, 90),
+            active_focused_foreground: Color::Rgb(40, 42, 54),
+            active_focused_background: Color::Rgb(189, 147, 249),
+            overlay_backdrop: Color::Rgb(25, 26, 34),
+            scrollbar_track: Color::Rgb(68, 71, 90),
+            scrollbar_thumb: Color::Rgb(189, 147, 249),
+        }
+    }
+
+    fn tokyo_night() -> Self {
+        Self {
+            primary: Color::Rgb(122, 162, 247),
+            secondary: Color::Rgb(187, 154, 247),
+            danger: Color::Rgb(247, 118, 142),
+            info: Color::Rgb(125, 207, 255),
+            success: Color::Rgb(158, 206, 106),
+            warning: Color::Rgb(224, 175, 104),
+            action_focus_foreground: Color::Rgb(26, 27, 38),
+            text: Color::Rgb(192, 202, 245),
+            text_muted: Color::Rgb(169, 177, 214),
+            background: Color::Rgb(26, 27, 38),
+            surface: Color::Rgb(31, 35, 53),
+            surface_elevated: Color::Rgb(36, 40, 59),
+            surface_modal: Color::Rgb(41, 46, 66),
+            surface_popup: Color::Rgb(35, 38, 56),
+            surface_tooltip: Color::Rgb(22, 22, 30),
+            border: Color::Rgb(65, 72, 104),
+            focus_ring: Color::Rgb(125, 207, 255),
+            focus_background: Color::Rgb(46, 60, 100),
+            selected_foreground: Color::Rgb(26, 27, 38),
+            selected_background: Color::Rgb(122, 162, 247),
+            selected_focused_foreground: Color::Rgb(26, 27, 38),
+            selected_focused_background: Color::Rgb(125, 207, 255),
+            active_foreground: Color::Rgb(192, 202, 245),
+            active_background: Color::Rgb(51, 70, 124),
+            active_focused_foreground: Color::Rgb(26, 27, 38),
+            active_focused_background: Color::Rgb(122, 162, 247),
+            overlay_backdrop: Color::Rgb(15, 15, 21),
+            scrollbar_track: Color::Rgb(41, 46, 66),
+            scrollbar_thumb: Color::Rgb(122, 162, 247),
         }
     }
 }
@@ -208,18 +337,51 @@ impl ThemeStyles {
         Self::from_palette(palette, Color::White, Color::White)
     }
 
+    /// Create semantic styles for the One Dark theme.
+    pub fn one_dark() -> Self {
+        let palette = Palette::one_dark();
+        Self::from_palette(palette, palette.background, palette.background)
+    }
+
+    /// Create semantic styles for the Dracula theme.
+    pub fn dracula() -> Self {
+        let palette = Palette::dracula();
+        Self::from_palette(palette, palette.background, palette.background)
+    }
+
+    /// Create semantic styles for the Tokyo Night theme.
+    pub fn tokyo_night() -> Self {
+        let palette = Palette::tokyo_night();
+        Self::from_palette(palette, palette.background, palette.background)
+    }
+
     fn from_palette(palette: Palette, action_fg: Color, status_fg: Color) -> Self {
         Self {
             // Action styles
             primary_action: Style::default().fg(action_fg).bg(palette.primary),
-            primary_action_hover: Style::default().fg(action_fg).bg(palette.primary).bold(),
-            primary_action_focused: Style::default().fg(action_fg).bg(palette.primary).bold(),
+            primary_action_hover: Style::default()
+                .fg(palette.selected_focused_foreground)
+                .bg(palette.selected_focused_background)
+                .bold(),
+            primary_action_focused: Style::default()
+                .fg(palette.action_focus_foreground)
+                .bg(palette.warning)
+                .bold(),
             secondary_action: Style::default().fg(action_fg).bg(palette.secondary),
-            secondary_action_hover: Style::default().fg(action_fg).bg(palette.secondary).bold(),
-            secondary_action_focused: Style::default().fg(action_fg).bg(palette.secondary).bold(),
+            secondary_action_hover: Style::default()
+                .fg(palette.active_focused_foreground)
+                .bg(palette.active_focused_background)
+                .bold(),
+            secondary_action_focused: Style::default()
+                .fg(palette.action_focus_foreground)
+                .bg(palette.warning)
+                .bold(),
             destructive_action: Style::default().fg(Color::White).bg(palette.danger),
             destructive_action_hover: Style::default().fg(Color::White).bg(palette.danger).bold(),
-            destructive_action_focused: Style::default().fg(Color::White).bg(palette.danger).bold(),
+            destructive_action_focused: Style::default()
+                .fg(palette.action_focus_foreground)
+                .bg(palette.warning)
+                .bold(),
 
             // Interactive element styles
             interactive: Style::default().fg(palette.text).bg(palette.surface),
@@ -250,16 +412,22 @@ impl ThemeStyles {
             overlay_backdrop: Style::default().bg(palette.overlay_backdrop),
 
             // State styles
-            selected: Style::default().fg(action_fg).bg(palette.primary),
+            selected: Style::default()
+                .fg(palette.selected_foreground)
+                .bg(palette.selected_background)
+                .bold(),
             selected_focused: Style::default()
-                .fg(palette.text)
-                .bg(palette.focus_background)
+                .fg(palette.selected_focused_foreground)
+                .bg(palette.selected_focused_background)
                 .bold(),
             list_active: Style::default()
-                .fg(palette.text)
-                .bg(palette.focus_background)
+                .fg(palette.active_foreground)
+                .bg(palette.active_background)
                 .bold(),
-            list_active_focused: Style::default().fg(palette.text).bg(palette.surface).bold(),
+            list_active_focused: Style::default()
+                .fg(palette.active_focused_foreground)
+                .bg(palette.active_focused_background)
+                .bold(),
             status_info: Style::default().fg(status_fg).bg(palette.info).bold(),
             status_success: Style::default().fg(status_fg).bg(palette.success).bold(),
             status_warning: Style::default().fg(status_fg).bg(palette.warning).bold(),
@@ -275,16 +443,16 @@ impl ThemeStyles {
             validation_warning: Style::default().fg(palette.warning).bold(),
             validation_error: Style::default().fg(palette.danger).bold(),
             menu_item_hover: Style::default()
-                .fg(palette.text)
-                .bg(palette.surface_elevated)
+                .fg(palette.active_foreground)
+                .bg(palette.active_background)
                 .bold(),
             menu_item_active: Style::default()
-                .fg(palette.text)
-                .bg(palette.surface_elevated)
+                .fg(palette.active_foreground)
+                .bg(palette.active_background)
                 .bold(),
             menu_item_active_focused: Style::default()
-                .fg(palette.text)
-                .bg(palette.focus_background)
+                .fg(palette.active_focused_foreground)
+                .bg(palette.active_focused_background)
                 .bold(),
             scrollbar_track: Style::default()
                 .fg(palette.scrollbar_track)
@@ -340,6 +508,21 @@ impl Theme {
     /// Create the built-in light theme
     pub fn light() -> Self {
         Self::new("light", ThemeStyles::light())
+    }
+
+    /// Create the built-in One Dark theme.
+    pub fn one_dark() -> Self {
+        Self::new("one-dark", ThemeStyles::one_dark())
+    }
+
+    /// Create the built-in Dracula theme.
+    pub fn dracula() -> Self {
+        Self::new("dracula", ThemeStyles::dracula())
+    }
+
+    /// Create the built-in Tokyo Night theme.
+    pub fn tokyo_night() -> Self {
+        Self::new("tokyo-night", ThemeStyles::tokyo_night())
     }
 
     /// Create a theme builder for custom themes
@@ -546,6 +729,61 @@ mod tests {
     fn test_light_theme_creation() {
         let theme = Theme::light();
         assert_eq!(theme.name, "light");
+    }
+
+    #[test]
+    fn test_named_theme_creation() {
+        assert_eq!(Theme::one_dark().name, "one-dark");
+        assert_eq!(Theme::dracula().name, "dracula");
+        assert_eq!(Theme::tokyo_night().name, "tokyo-night");
+    }
+
+    #[test]
+    fn test_selection_states_are_visually_distinct() {
+        for styles in [
+            ThemeStyles::dark(),
+            ThemeStyles::light(),
+            ThemeStyles::one_dark(),
+            ThemeStyles::dracula(),
+            ThemeStyles::tokyo_night(),
+        ] {
+            assert_ne!(styles.selected.bg_color, styles.surface.bg_color);
+            assert_ne!(styles.selected_focused.bg_color, styles.surface.bg_color);
+            assert_ne!(styles.list_active_focused.bg_color, styles.surface.bg_color);
+            assert!(styles.selected.modifiers.contains_bold());
+            assert!(styles.selected_focused.modifiers.contains_bold());
+        }
+    }
+
+    #[test]
+    fn test_button_focus_states_are_visually_distinct() {
+        for styles in [
+            ThemeStyles::dark(),
+            ThemeStyles::light(),
+            ThemeStyles::one_dark(),
+            ThemeStyles::dracula(),
+            ThemeStyles::tokyo_night(),
+        ] {
+            assert_ne!(
+                styles.primary_action_focused.bg_color,
+                styles.primary_action.bg_color
+            );
+            assert_ne!(
+                styles.secondary_action_focused.bg_color,
+                styles.secondary_action.bg_color
+            );
+            assert_ne!(
+                styles.destructive_action_focused.bg_color,
+                styles.destructive_action.bg_color
+            );
+            assert_ne!(
+                styles.primary_action_hover.bg_color,
+                styles.primary_action.bg_color
+            );
+            assert!(styles.primary_action_focused.modifiers.contains_bold());
+            assert!(styles.secondary_action_focused.modifiers.contains_bold());
+            assert!(styles.destructive_action_focused.modifiers.contains_bold());
+        }
     }
 
     #[test]

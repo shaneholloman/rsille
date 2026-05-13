@@ -1,12 +1,11 @@
 //! Theme showcase with runtime switching.
 //!
 //! Run with: `cargo run -p tui --example theme`
-//! Use Left/Right or 1/2/3 to switch themes. Tab focuses the interactive controls. Esc to quit.
+//! Use Left/Right or 1-5 to switch themes. Tab focuses the interactive controls. Esc to quit.
 
 use tui::prelude::*;
-use tui::style::ThemeStyles;
 
-const THEME_COUNT: usize = 3;
+const THEME_COUNT: usize = 5;
 
 #[derive(Debug, Default)]
 struct State {
@@ -34,6 +33,8 @@ fn main() -> WidgetResult<()> {
         .on_key(KeyCode::Char('1'), || Msg::SetTheme(0))
         .on_key(KeyCode::Char('2'), || Msg::SetTheme(1))
         .on_key(KeyCode::Char('3'), || Msg::SetTheme(2))
+        .on_key(KeyCode::Char('4'), || Msg::SetTheme(3))
+        .on_key(KeyCode::Char('5'), || Msg::SetTheme(4))
         .run_inline(update, view)
 }
 
@@ -74,7 +75,7 @@ fn view(state: &State) -> impl Widget<Msg> {
                     theme.name
                 )))
                 .child(
-                    label("Press Left/Right or 1/2/3 to switch themes. Tab moves into the input and action buttons.")
+                    label("Press Left/Right or 1-5 to switch themes. Tab moves into the input and action buttons.")
                         .style(theme.styles.text_muted),
                 ),
         )
@@ -173,7 +174,9 @@ fn theme_picker_row(active_theme: usize) -> Flex<Msg> {
         .gap(1)
         .child(theme_button("1 Dark", 0, active_theme))
         .child(theme_button("2 Light", 1, active_theme))
-        .child(theme_button("3 Sunset", 2, active_theme))
+        .child(theme_button("3 One Dark", 2, active_theme))
+        .child(theme_button("4 Dracula", 3, active_theme))
+        .child(theme_button("5 Tokyo Night", 4, active_theme))
 }
 
 fn theme_button(label_text: &'static str, index: usize, active_theme: usize) -> Button<Msg> {
@@ -213,15 +216,19 @@ fn theme_title(index: usize) -> &'static str {
     match index.min(THEME_COUNT - 1) {
         0 => "Dark",
         1 => "Light",
-        _ => "Sunset",
+        2 => "One Dark",
+        3 => "Dracula",
+        _ => "Tokyo Night",
     }
 }
 
 fn theme_description(index: usize) -> &'static str {
     match index.min(THEME_COUNT - 1) {
-        0 => "Built-in dark palette for dense terminal workflows.",
+        0 => "Built-in dark palette with stronger selected and focused states.",
         1 => "Built-in light palette for bright terminal sessions.",
-        _ => "Custom warm palette showing how to build a branded theme.",
+        2 => "Atom's One Dark palette adapted for terminal contrast.",
+        3 => "Dracula's high-chroma palette with clear focus affordances.",
+        _ => "Tokyo Night colors tuned for calm, readable terminal UIs.",
     }
 }
 
@@ -229,122 +236,8 @@ fn theme_for(index: usize) -> Theme {
     match index.min(THEME_COUNT - 1) {
         0 => Theme::dark(),
         1 => Theme::light(),
-        _ => sunset_theme(),
+        2 => Theme::one_dark(),
+        3 => Theme::dracula(),
+        _ => Theme::tokyo_night(),
     }
-}
-
-fn sunset_theme() -> Theme {
-    let mut styles = ThemeStyles::dark();
-    styles.primary_action = Style::default()
-        .fg(Color::Rgb(34, 20, 35))
-        .bg(Color::Rgb(255, 140, 92))
-        .bold();
-    styles.primary_action_focused = Style::default()
-        .fg(Color::Rgb(34, 20, 35))
-        .bg(Color::Rgb(255, 214, 102))
-        .bold();
-    styles.secondary_action = Style::default()
-        .fg(Color::Rgb(34, 20, 35))
-        .bg(Color::Rgb(255, 196, 107));
-    styles.secondary_action_focused = Style::default()
-        .fg(Color::Rgb(34, 20, 35))
-        .bg(Color::Rgb(255, 196, 107))
-        .bold();
-    styles.destructive_action = Style::default()
-        .fg(Color::Rgb(34, 20, 35))
-        .bg(Color::Rgb(255, 107, 129))
-        .bold();
-    styles.destructive_action_focused = styles.destructive_action.bold();
-    styles.interactive = Style::default()
-        .fg(Color::Rgb(255, 243, 230))
-        .bg(Color::Rgb(59, 36, 58));
-    styles.interactive_focused = Style::default()
-        .fg(Color::Rgb(255, 243, 230))
-        .bg(Color::Rgb(92, 53, 84))
-        .bold();
-    styles.text = Style::default().fg(Color::Rgb(255, 243, 230));
-    styles.text_muted = Style::default().fg(Color::Rgb(223, 198, 176));
-    styles.text_placeholder = styles.text_muted;
-    styles.text_heading = styles.text.bold();
-    styles.surface = Style::default()
-        .fg(Color::Rgb(255, 243, 230))
-        .bg(Color::Rgb(34, 20, 35));
-    styles.surface_elevated = Style::default()
-        .fg(Color::Rgb(255, 243, 230))
-        .bg(Color::Rgb(59, 36, 58));
-    styles.surface_header = Style::default()
-        .fg(Color::Rgb(255, 243, 230))
-        .bg(Color::Rgb(59, 36, 58))
-        .bold();
-    styles.surface_modal = Style::default()
-        .fg(Color::Rgb(255, 243, 230))
-        .bg(Color::Rgb(79, 45, 71));
-    styles.surface_popup = Style::default()
-        .fg(Color::Rgb(255, 243, 230))
-        .bg(Color::Rgb(70, 42, 66));
-    styles.surface_tooltip = Style::default()
-        .fg(Color::Rgb(34, 20, 35))
-        .bg(Color::Rgb(255, 214, 102))
-        .bold();
-    styles.overlay_backdrop = Style::default().bg(Color::Rgb(28, 16, 29));
-    styles.selected = Style::default()
-        .fg(Color::Rgb(34, 20, 35))
-        .bg(Color::Rgb(255, 140, 92))
-        .bold();
-    styles.selected_focused = Style::default()
-        .fg(Color::Rgb(255, 243, 230))
-        .bg(Color::Rgb(92, 53, 84))
-        .bold();
-    styles.list_active = styles.selected_focused;
-    styles.list_active_focused = Style::default()
-        .fg(Color::Rgb(255, 243, 230))
-        .bg(Color::Rgb(59, 36, 58))
-        .bold();
-    styles.status_info = Style::default()
-        .fg(Color::Rgb(34, 20, 35))
-        .bg(Color::Rgb(112, 214, 255))
-        .bold();
-    styles.status_success = Style::default()
-        .fg(Color::Rgb(34, 20, 35))
-        .bg(Color::Rgb(143, 242, 160))
-        .bold();
-    styles.status_warning = Style::default()
-        .fg(Color::Rgb(34, 20, 35))
-        .bg(Color::Rgb(255, 214, 102))
-        .bold();
-    styles.status_error = Style::default()
-        .fg(Color::Rgb(34, 20, 35))
-        .bg(Color::Rgb(255, 107, 129))
-        .bold();
-    styles.hover = Style::default()
-        .fg(Color::Rgb(34, 20, 35))
-        .bg(Color::Rgb(255, 214, 102))
-        .bold();
-    styles.border = Style::default().fg(Color::Rgb(137, 93, 123));
-    styles.border_focused = Style::default().fg(Color::Rgb(255, 214, 102));
-    styles.cursor = Style::default()
-        .fg(Color::Rgb(34, 20, 35))
-        .bg(Color::Rgb(255, 243, 230));
-    styles.selection_range = Style::default().bg(Color::Rgb(92, 53, 84));
-    styles.validation_info = Style::default().fg(Color::Rgb(112, 214, 255)).bold();
-    styles.validation_success = Style::default().fg(Color::Rgb(143, 242, 160)).bold();
-    styles.validation_warning = Style::default().fg(Color::Rgb(255, 214, 102)).bold();
-    styles.validation_error = Style::default().fg(Color::Rgb(255, 107, 129)).bold();
-    styles.menu_item_hover = Style::default()
-        .fg(Color::Rgb(255, 243, 230))
-        .bg(Color::Rgb(92, 53, 84))
-        .bold();
-    styles.menu_item_active = styles.menu_item_hover;
-    styles.menu_item_active_focused = Style::default()
-        .fg(Color::Rgb(255, 243, 230))
-        .bg(Color::Rgb(121, 66, 97))
-        .bold();
-    styles.scrollbar_track = Style::default()
-        .fg(Color::Rgb(137, 93, 123))
-        .bg(Color::Rgb(34, 20, 35));
-    styles.scrollbar_thumb = Style::default()
-        .fg(Color::Rgb(255, 214, 102))
-        .bg(Color::Rgb(59, 36, 58));
-
-    Theme::builder().name("sunset").styles(styles).build()
 }

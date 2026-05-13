@@ -144,7 +144,9 @@ impl<M> Widget<M> for Button<M> {
             .and_then(|_| ctx.animation_value("focus"))
             .unwrap_or(focus_target)
             .clamp(0.0, 1.0);
-        let is_focused = if self.animation.is_some() {
+        let is_focused = if self.disabled {
+            false
+        } else if self.animation.is_some() {
             focus_amount >= 0.5
         } else {
             ctx.is_focused()
@@ -193,6 +195,10 @@ impl<M> Widget<M> for Button<M> {
         let text_y = height / 2;
 
         let _ = chunk.set_string(text_x, text_y, &self.label, render_style);
+
+        if is_focused {
+            render_focus_markers(chunk, self.variant, text_y, render_style);
+        }
     }
 
     fn animate(&self, ctx: &mut AnimationCtx) -> bool {
@@ -257,4 +263,104 @@ impl<M> Widget<M> for Button<M> {
 /// Create a new button widget.
 pub fn button<M>(label: impl Into<String>) -> Button<M> {
     Button::new(label)
+}
+
+fn render_focus_markers(
+    chunk: &mut render::chunk::Chunk,
+    variant: ButtonVariant,
+    y: u16,
+    style: render::style::Style,
+) {
+    let width = chunk.area().width();
+    if width < 2 {
+        return;
+    }
+
+    let (left_x, right_x) = if matches!(variant, ButtonVariant::Ghost) && width >= 4 {
+        (1, width - 2)
+    } else {
+        (0, width - 1)
+    };
+
+    let _ = chunk.set_char(left_x, y, '>', style);
+    let _ = chunk.set_char(right_x, y, '<', style);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::animation::AnimationStore;
+    use crate::widget::{WidgetPath, WidgetStore};
+    use render::area::Area;
+    use render::buffer::Buffer;
+    use render::chunk::Chunk;
+    use std::cell::RefCell;
+    use std::collections::HashMap;
+
+    #[test]
+    fn focused_solid_button_renders_structural_markers() {
+        let button = button::<()>("OK");
+        let buffer = render_button(&button, 6, 1, true);
+
+        assert_eq!(cell_char(&buffer, 0, 0), Some('>'));
+        assert_eq!(cell_char(&buffer, 5, 0), Some('<'));
+        assert_eq!(cell_char(&buffer, 2, 0), Some('O'));
+        assert_eq!(cell_char(&buffer, 3, 0), Some('K'));
+    }
+
+    #[test]
+    fn unfocused_solid_button_does_not_render_focus_markers() {
+        let button = button::<()>("OK");
+        let buffer = render_button(&button, 6, 1, false);
+
+        assert_ne!(cell_char(&buffer, 0, 0), Some('>'));
+        assert_ne!(cell_char(&buffer, 5, 0), Some('<'));
+    }
+
+    #[test]
+    fn focused_ghost_button_renders_markers_inside_border() {
+        let button = button::<()>("OK").variant(ButtonVariant::Ghost);
+        let buffer = render_button(&button, 8, 3, true);
+
+        assert_eq!(cell_char(&buffer, 1, 1), Some('>'));
+        assert_eq!(cell_char(&buffer, 6, 1), Some('<'));
+        assert_eq!(cell_char(&buffer, 3, 1), Some('O'));
+        assert_eq!(cell_char(&buffer, 4, 1), Some('K'));
+    }
+
+    #[test]
+    fn disabled_button_does_not_render_focus_markers() {
+        let button = button::<()>("OK").disabled(true);
+        let buffer = render_button(&button, 6, 1, true);
+
+        assert_ne!(cell_char(&buffer, 0, 0), Some('>'));
+        assert_ne!(cell_char(&buffer, 5, 0), Some('<'));
+    }
+
+    fn render_button(button: &Button<()>, width: u16, height: u16, focused: bool) -> Buffer {
+        let mut buffer = Buffer::new((width, height).into());
+        let area = Area::new((0, 0).into(), (width, height).into());
+        let mut chunk = Chunk::new(&mut buffer, area).unwrap();
+        let store = WidgetStore::new();
+        let animation_store = AnimationStore::new();
+        let theme = Theme::dark();
+        let geometry = RefCell::new(HashMap::<WidgetPath, Area>::new());
+        let focused_path = focused.then(WidgetPath::root);
+        let ctx = crate::widget::RenderCtx::new(
+            &store,
+            &animation_store,
+            &theme,
+            focused_path.as_ref(),
+            &geometry,
+        );
+
+        button.render(&mut chunk, &ctx);
+        drop(chunk);
+        buffer
+    }
+
+    fn cell_char(buffer: &Buffer, x: u16, y: u16) -> Option<char> {
+        let index = (y * buffer.size().width + x) as usize;
+        buffer.content()[index].content.c
+    }
 }
