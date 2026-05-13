@@ -9,8 +9,8 @@ use crate::layout::{ensure_item_visible, Constraints};
 use crate::style::{BorderStyle, Style};
 use crate::widget::{EventCtx, EventPhase, RenderCtx, Widget};
 
-use super::select::{match_search_score, SelectSearchMode};
-use super::selection::SelectionState;
+use crate::widgets::collections::selection::SelectionState;
+use crate::widgets::controls::select::{match_search_score, SelectSearchMode};
 
 /// A searchable command palette entry.
 #[derive(Debug, Clone, PartialEq, Eq)]

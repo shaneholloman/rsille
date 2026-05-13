@@ -9,7 +9,7 @@ use crate::layout::{ensure_item_visible, Constraints};
 use crate::style::{BorderStyle, Style};
 use crate::widget::{EventCtx, EventPhase, RenderCtx, Widget};
 
-use super::selection::SelectionState;
+use crate::widgets::collections::selection::SelectionState;
 
 /// A single select option.
 #[derive(Debug, Clone, PartialEq, Eq)]

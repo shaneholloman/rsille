@@ -1,32 +1,18 @@
 //! Built-in widgets
 
-pub mod animated;
-pub mod button;
-pub mod calendar;
-pub mod canvas;
-pub mod checkbox;
-pub mod collapsible;
-pub mod command_palette;
-pub mod content;
-pub mod data_table;
-pub mod dialog;
-pub mod divider;
-pub mod file_explorer;
-pub mod label;
-pub mod list;
-pub mod menu;
-pub mod panel;
-pub mod progress;
-pub mod radio_group;
-pub mod select;
-pub mod selection;
-pub mod spacer;
-pub mod switch;
-pub mod tabs;
-pub mod text_input;
-pub mod textarea;
-pub mod tree;
-pub mod visual;
+pub mod collections;
+pub mod controls;
+pub mod display;
+pub mod layout;
+pub mod motion;
+pub mod navigation;
+
+pub use collections::{data_table, file_explorer, list, selection, tree};
+pub use controls::{button, calendar, checkbox, radio_group, select, switch, text_input, textarea};
+pub use display::{canvas, content, divider, label, progress, spacer};
+pub use layout::{collapsible, dialog, panel};
+pub use motion::{animated, visual};
+pub use navigation::{command_palette, menu, tabs};
 
 pub use animated::{animate, Animated};
 pub use button::{button, Button, ButtonVariant};
