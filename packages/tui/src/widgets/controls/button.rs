@@ -5,6 +5,7 @@ use crate::focus::FocusConfig;
 use crate::layout::Constraints;
 use crate::style::{Style, Theme};
 use crate::widget::{EventCtx, EventPhase, RenderCtx, Widget};
+use crate::widgets::VariantWidget;
 
 /// Button style variants.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -52,11 +53,6 @@ impl<M> Button<M> {
 
     pub fn key(mut self, name: impl Into<String>) -> Self {
         self.widget_key = Some(name.into());
-        self
-    }
-
-    pub fn variant(mut self, variant: ButtonVariant) -> Self {
-        self.variant = variant;
         self
     }
 
@@ -115,6 +111,15 @@ impl<M> Button<M> {
                 }
             }
         }
+    }
+}
+
+impl<M> VariantWidget for Button<M> {
+    type Variant = ButtonVariant;
+
+    fn variant(mut self, variant: Self::Variant) -> Self {
+        self.variant = variant;
+        self
     }
 }
 

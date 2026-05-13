@@ -6,6 +6,7 @@ pub mod display;
 pub mod layout;
 pub mod motion;
 pub mod navigation;
+mod variant;
 
 pub use collections::{data_table, file_explorer, list, selection, tree};
 pub use controls::{button, calendar, checkbox, radio_group, select, switch, text_input, textarea};
@@ -50,6 +51,7 @@ pub use tabs::{tabs, TabItem, Tabs, TabsState};
 pub use text_input::{text_input, TextInput, TextInputState, TextInputVariant};
 pub use textarea::{textarea, TextArea, TextAreaState, TextAreaVariant};
 pub use tree::{tree, Tree, TreeItem, TreeState};
+pub use variant::VariantWidget;
 pub use visual::{
     looping_visual_spec, visual, BlurMode, CellEffect, CellSample, CustomCellEffect, DissolveMode,
     GradientDirection, GradientTarget, IntoVisualEnter, IntoVisualExit, LargeAreaPolicy,
@@ -57,3 +59,24 @@ pub use visual::{
     VisualCtx, VisualDegradation, VisualEffect, VisualEffectCost, VisualPerformanceConfig,
     VisualProfile, WaveAxis, WipeDirection, WipeMode,
 };
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn assert_variant_widget<W, V>()
+    where
+        W: VariantWidget<Variant = V>,
+        V: Copy + Default,
+    {
+    }
+
+    #[test]
+    fn built_in_visual_variants_use_shared_api() {
+        assert_variant_widget::<Button<()>, ButtonVariant>();
+        assert_variant_widget::<Divider<()>, DividerVariant>();
+        assert_variant_widget::<ProgressBar<()>, ProgressBarVariant>();
+        assert_variant_widget::<TextArea<()>, TextAreaVariant>();
+        assert_variant_widget::<TextInput<()>, TextInputVariant>();
+    }
+}

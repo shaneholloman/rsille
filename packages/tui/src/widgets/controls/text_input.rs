@@ -10,6 +10,7 @@ use crate::layout::border_renderer;
 use crate::layout::Constraints;
 use crate::style::{BorderStyle, Style, Theme};
 use crate::widget::{EventCtx, EventPhase, RenderCtx, Widget};
+use crate::widgets::VariantWidget;
 
 /// Text input style variants.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -89,11 +90,6 @@ impl<M> TextInput<M> {
         self
     }
 
-    pub fn variant(mut self, variant: TextInputVariant) -> Self {
-        self.variant = variant;
-        self
-    }
-
     pub fn value(mut self, value: impl Into<String>) -> Self {
         self.value = value.into();
         self
@@ -154,6 +150,15 @@ impl<M> TextInput<M> {
             .as_ref()
             .map(|s| s.merge(base_style))
             .unwrap_or(base_style)
+    }
+}
+
+impl<M> VariantWidget for TextInput<M> {
+    type Variant = TextInputVariant;
+
+    fn variant(mut self, variant: Self::Variant) -> Self {
+        self.variant = variant;
+        self
     }
 }
 

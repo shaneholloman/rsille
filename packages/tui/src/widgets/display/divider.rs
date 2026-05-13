@@ -2,8 +2,9 @@
 
 use crate::event::Event;
 use crate::layout::Constraints;
-use crate::style::{BorderStyle, Style};
+use crate::style::Style;
 use crate::widget::{EventCtx, RenderCtx, Widget};
+use crate::widgets::VariantWidget;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DividerDirection {
@@ -86,11 +87,6 @@ impl<M> Divider<M> {
         self
     }
 
-    pub fn variant(mut self, variant: DividerVariant) -> Self {
-        self.variant = variant;
-        self
-    }
-
     pub fn text(mut self, text: impl Into<String>) -> Self {
         self.text = Some(text.into());
         self
@@ -103,18 +99,6 @@ impl<M> Divider<M> {
 
     pub fn text_spacing(mut self, spacing: u16) -> Self {
         self.text_spacing = spacing;
-        self
-    }
-
-    #[deprecated(since = "0.1.0", note = "Use variant() instead")]
-    pub fn border_style(mut self, style: BorderStyle) -> Self {
-        self.variant = match style {
-            BorderStyle::None => DividerVariant::Faded,
-            BorderStyle::Single => DividerVariant::Solid,
-            BorderStyle::Double => DividerVariant::Double,
-            BorderStyle::Rounded => DividerVariant::Solid,
-            BorderStyle::Thick => DividerVariant::Heavy,
-        };
         self
     }
 
@@ -197,6 +181,15 @@ impl<M> Divider<M> {
 impl<M> Default for Divider<M> {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl<M> VariantWidget for Divider<M> {
+    type Variant = DividerVariant;
+
+    fn variant(mut self, variant: Self::Variant) -> Self {
+        self.variant = variant;
+        self
     }
 }
 

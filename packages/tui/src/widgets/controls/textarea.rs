@@ -10,6 +10,7 @@ use crate::layout::border_renderer;
 use crate::layout::{ensure_item_visible, Constraints};
 use crate::style::{BorderStyle, Style, Theme};
 use crate::widget::{EventCtx, EventPhase, RenderCtx, Widget};
+use crate::widgets::VariantWidget;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum TextAreaVariant {
@@ -89,16 +90,6 @@ impl<M> TextArea<M> {
         self
     }
 
-    pub fn variant(mut self, variant: TextAreaVariant) -> Self {
-        self.variant = variant;
-        self
-    }
-
-    pub fn borderless(mut self) -> Self {
-        self.variant = TextAreaVariant::Borderless;
-        self
-    }
-
     pub fn disabled(mut self, disabled: bool) -> Self {
         self.disabled = disabled;
         self
@@ -148,6 +139,15 @@ impl<M> TextArea<M> {
         self.custom_style
             .map(|style| style.merge(base_style))
             .unwrap_or(base_style)
+    }
+}
+
+impl<M> VariantWidget for TextArea<M> {
+    type Variant = TextAreaVariant;
+
+    fn variant(mut self, variant: Self::Variant) -> Self {
+        self.variant = variant;
+        self
     }
 }
 

@@ -5,6 +5,7 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 use crate::layout::Constraints;
 use crate::style::Style;
 use crate::widget::{RenderCtx, Widget};
+use crate::widgets::VariantWidget;
 
 /// Built-in visual treatments for [`ProgressBar`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -67,11 +68,6 @@ impl<M> ProgressBar<M> {
         self
     }
 
-    pub fn variant(mut self, variant: ProgressBarVariant) -> Self {
-        self.variant = variant;
-        self
-    }
-
     pub fn style(mut self, style: Style) -> Self {
         self.custom_style = Some(style);
         self
@@ -79,6 +75,15 @@ impl<M> ProgressBar<M> {
 
     pub fn fill_style(mut self, style: Style) -> Self {
         self.fill_style = Some(style);
+        self
+    }
+}
+
+impl<M> VariantWidget for ProgressBar<M> {
+    type Variant = ProgressBarVariant;
+
+    fn variant(mut self, variant: Self::Variant) -> Self {
+        self.variant = variant;
         self
     }
 }
