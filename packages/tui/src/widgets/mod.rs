@@ -38,7 +38,9 @@ pub use label::{label, Label};
 pub use list::{list, List, ListItem, ListState};
 pub use menu::{menu, Menu, MenuItem, MenuState};
 pub use panel::{panel, Panel};
-pub use progress::{loading_indicator, progress_bar, LoadingIndicator, ProgressBar};
+pub use progress::{
+    loading_indicator, progress_bar, LoadingIndicator, ProgressBar, ProgressBarVariant,
+};
 pub use radio_group::{radio_group, RadioGroup, RadioGroupState, RadioOption};
 pub use select::{select, Select, SelectOption, SelectSearchMode, SelectState};
 pub use selection::{SelectionMode, SelectionState};

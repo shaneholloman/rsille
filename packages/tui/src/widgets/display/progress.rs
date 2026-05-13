@@ -6,12 +6,27 @@ use crate::layout::Constraints;
 use crate::style::Style;
 use crate::widget::{RenderCtx, Widget};
 
+/// Built-in visual treatments for [`ProgressBar`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ProgressBarVariant {
+    /// A slim modern rail with a leading edge marker.
+    #[default]
+    Line,
+    /// A dense bar using block and shaded cells.
+    Block,
+    /// Discrete filled/empty segments.
+    Segmented,
+    /// Legacy ASCII-style bar with brackets.
+    Classic,
+}
+
 /// Horizontal progress bar.
 #[derive(Debug, Clone)]
 pub struct ProgressBar<M = ()> {
     value: f64,
     label: Option<String>,
     width: u16,
+    variant: ProgressBarVariant,
     custom_style: Option<Style>,
     fill_style: Option<Style>,
     widget_key: Option<String>,
@@ -24,6 +39,7 @@ impl<M> ProgressBar<M> {
             value,
             label: None,
             width: 24,
+            variant: ProgressBarVariant::default(),
             custom_style: None,
             fill_style: None,
             widget_key: None,
@@ -51,6 +67,11 @@ impl<M> ProgressBar<M> {
         self
     }
 
+    pub fn variant(mut self, variant: ProgressBarVariant) -> Self {
+        self.variant = variant;
+        self
+    }
+
     pub fn style(mut self, style: Style) -> Self {
         self.custom_style = Some(style);
         self
@@ -72,24 +93,31 @@ impl<M> Widget<M> for ProgressBar<M> {
         let theme = ctx.theme();
         let track_style = self
             .custom_style
-            .map(|style| style.merge(theme.styles.interactive))
-            .unwrap_or(theme.styles.interactive)
+            .map(|style| style.merge(theme.styles.scrollbar_track))
+            .unwrap_or(theme.styles.scrollbar_track)
             .to_render_style();
         let fill_style = self
             .fill_style
-            .unwrap_or(theme.styles.selected)
+            .map(|style| style.merge(theme.styles.scrollbar_thumb))
+            .unwrap_or(theme.styles.scrollbar_thumb)
             .to_render_style();
         let value = self.value.clamp(0.0, 1.0);
-        let bar_width = area.width().saturating_sub(2).max(1);
-        let filled = ((bar_width as f64) * value).round() as u16;
+        let bar_width = area.width();
 
-        let _ = chunk.set_char(0, 0, '[', track_style);
-        for x in 0..bar_width {
-            let style = if x < filled { fill_style } else { track_style };
-            let ch = if x < filled { '#' } else { '-' };
-            let _ = chunk.set_char(x + 1, 0, ch, style);
+        match self.variant {
+            ProgressBarVariant::Line => {
+                render_line_bar(chunk, bar_width, value, track_style, fill_style)
+            }
+            ProgressBarVariant::Block => {
+                render_block_bar(chunk, bar_width, value, track_style, fill_style)
+            }
+            ProgressBarVariant::Segmented => {
+                render_segmented_bar(chunk, bar_width, value, track_style, fill_style)
+            }
+            ProgressBarVariant::Classic => {
+                render_classic_bar(chunk, bar_width, value, track_style, fill_style)
+            }
         }
-        let _ = chunk.set_char(bar_width + 1, 0, ']', track_style);
 
         if let Some(label) = self.label.as_ref() {
             let text = truncate_to_width(label, area.width() as usize);
@@ -111,6 +139,110 @@ impl<M> Widget<M> for ProgressBar<M> {
     fn key(&self) -> Option<&str> {
         self.widget_key.as_deref()
     }
+}
+
+fn filled_slots(width: u16, value: f64) -> u16 {
+    if value <= 0.0 {
+        0
+    } else {
+        ((width as f64) * value).ceil() as u16
+    }
+    .min(width)
+}
+
+fn render_line_bar(
+    chunk: &mut render::chunk::Chunk,
+    width: u16,
+    value: f64,
+    track_style: render::style::Style,
+    fill_style: render::style::Style,
+) {
+    let filled = filled_slots(width, value);
+    let head = filled.saturating_sub(1);
+
+    for x in 0..width {
+        let (ch, style) = if value >= 1.0 || x < head {
+            ('━', fill_style)
+        } else if filled > 0 && x == head {
+            ('╸', fill_style)
+        } else {
+            ('─', track_style)
+        };
+        let _ = chunk.set_char(x, 0, ch, style);
+    }
+}
+
+fn render_block_bar(
+    chunk: &mut render::chunk::Chunk,
+    width: u16,
+    value: f64,
+    track_style: render::style::Style,
+    fill_style: render::style::Style,
+) {
+    let progress = value * width as f64;
+    let full = progress.floor() as u16;
+    let partial = progress - full as f64;
+    let partials = ['▏', '▎', '▍', '▌', '▋', '▊', '▉'];
+
+    for x in 0..width {
+        let (ch, style) = if x < full {
+            ('█', fill_style)
+        } else if x == full && partial > 0.0 && value < 1.0 {
+            let index = ((partial * partials.len() as f64).ceil() as usize)
+                .saturating_sub(1)
+                .min(partials.len() - 1);
+            (partials[index], fill_style)
+        } else {
+            ('░', track_style)
+        };
+        let _ = chunk.set_char(x, 0, ch, style);
+    }
+}
+
+fn render_segmented_bar(
+    chunk: &mut render::chunk::Chunk,
+    width: u16,
+    value: f64,
+    track_style: render::style::Style,
+    fill_style: render::style::Style,
+) {
+    let filled = filled_slots(width, value);
+
+    for x in 0..width {
+        let (ch, style) = if x < filled {
+            ('■', fill_style)
+        } else {
+            ('□', track_style)
+        };
+        let _ = chunk.set_char(x, 0, ch, style);
+    }
+}
+
+fn render_classic_bar(
+    chunk: &mut render::chunk::Chunk,
+    width: u16,
+    value: f64,
+    track_style: render::style::Style,
+    fill_style: render::style::Style,
+) {
+    if width < 3 {
+        render_segmented_bar(chunk, width, value, track_style, fill_style);
+        return;
+    }
+
+    let inner_width = width.saturating_sub(2);
+    let filled = ((inner_width as f64) * value).round() as u16;
+
+    let _ = chunk.set_char(0, 0, '[', track_style);
+    for x in 0..inner_width {
+        let (ch, style) = if x < filled {
+            ('#', fill_style)
+        } else {
+            ('-', track_style)
+        };
+        let _ = chunk.set_char(x + 1, 0, ch, style);
+    }
+    let _ = chunk.set_char(width - 1, 0, ']', track_style);
 }
 
 /// Small frame-driven loading indicator.
@@ -168,21 +300,31 @@ impl<M> Widget<M> for LoadingIndicator<M> {
             return;
         }
 
-        let style = self
+        let theme = ctx.theme();
+        let spinner_style = self
             .custom_style
-            .map(|style| style.merge(ctx.theme().styles.interactive))
-            .unwrap_or(ctx.theme().styles.interactive)
+            .map(|style| style.merge(theme.styles.validation_info))
+            .unwrap_or(theme.styles.validation_info)
             .to_render_style();
-        let frames = ['|', '/', '-', '\\'];
+        let label_style = self
+            .custom_style
+            .map(|style| style.merge(theme.styles.text))
+            .unwrap_or(theme.styles.text)
+            .to_render_style();
+        let frames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
         let frame = self.frame;
         let spinner = frames[frame % frames.len()];
-        let text = if let Some(label) = self.label.as_ref() {
-            format!("{spinner} {label}")
-        } else {
-            spinner.to_string()
-        };
-        let display = truncate_to_width(&text, area.width() as usize);
-        let _ = chunk.set_string(0, 0, &display, style);
+        let _ = chunk.set_char(0, 0, spinner, spinner_style);
+
+        if area.width() <= 2 {
+            return;
+        }
+
+        if let Some(label) = self.label.as_ref() {
+            let _ = chunk.set_char(1, 0, ' ', label_style);
+            let display = truncate_to_width(label, area.width().saturating_sub(2) as usize);
+            let _ = chunk.set_string(2, 0, &display, label_style);
+        }
     }
 
     fn constraints(&self) -> Constraints {
@@ -238,6 +380,44 @@ mod tests {
     #[test]
     fn progress_renders_current_value_directly() {
         let widget = ProgressBar::<()>::new(0.5);
+        assert_eq!(render_progress(widget, 10), "━━━━╸─────");
+    }
+
+    #[test]
+    fn progress_supports_built_in_variants() {
+        assert_eq!(
+            render_progress(
+                ProgressBar::<()>::new(0.5).variant(ProgressBarVariant::Line),
+                10
+            ),
+            "━━━━╸─────"
+        );
+        assert_eq!(
+            render_progress(
+                ProgressBar::<()>::new(0.45).variant(ProgressBarVariant::Block),
+                10
+            ),
+            "████▌░░░░░"
+        );
+        assert_eq!(
+            render_progress(
+                ProgressBar::<()>::new(0.5).variant(ProgressBarVariant::Segmented),
+                10
+            ),
+            "■■■■■□□□□□"
+        );
+        assert_eq!(
+            render_progress(
+                ProgressBar::<()>::new(0.5).variant(ProgressBarVariant::Classic),
+                10
+            ),
+            "[####----]"
+        );
+    }
+
+    #[test]
+    fn loading_indicator_uses_modern_spinner_frames() {
+        let widget = LoadingIndicator::<()>::new().frame(3).label("Loading");
         let mut buffer = render::buffer::Buffer::new((10, 1).into());
         let area = render::area::Area::new((0, 0).into(), (10, 1).into());
         let mut chunk = render::chunk::Chunk::new(&mut buffer, area).unwrap();
@@ -249,12 +429,32 @@ mod tests {
 
         widget.render(&mut chunk, &ctx);
 
-        let rendered: String = (0..10)
+        let rendered: String = (0..9)
             .map(|x| {
                 let index = x as usize;
                 buffer.content()[index].content.c.unwrap()
             })
             .collect();
-        assert_eq!(rendered, "[####----]");
+        assert_eq!(rendered, "⠸ Loading");
+    }
+
+    fn render_progress(widget: ProgressBar<()>, width: u16) -> String {
+        let mut buffer = render::buffer::Buffer::new((width, 1).into());
+        let area = render::area::Area::new((0, 0).into(), (width, 1).into());
+        let mut chunk = render::chunk::Chunk::new(&mut buffer, area).unwrap();
+        let store = WidgetStore::default();
+        let animation_store = AnimationStore::new();
+        let theme = Theme::dark();
+        let geometry = std::cell::RefCell::new(std::collections::HashMap::new());
+        let ctx = RenderCtx::new(&store, &animation_store, &theme, None, &geometry);
+
+        widget.render(&mut chunk, &ctx);
+
+        (0..width)
+            .map(|x| {
+                let index = x as usize;
+                buffer.content()[index].content.c.unwrap()
+            })
+            .collect()
     }
 }
