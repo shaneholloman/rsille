@@ -2,7 +2,7 @@
 
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-use crate::event::{Event, KeyCode};
+use crate::event::{Event, KeyCode, MouseButton, MouseEventKind};
 use crate::focus::FocusConfig;
 use crate::layout::border_renderer;
 use crate::layout::{ensure_item_visible, Constraints};
@@ -441,10 +441,14 @@ impl<M: 'static> Widget<M> for Select<M> {
             return;
         }
 
-        let Event::Key(key_event) = event else {
-            return;
+        let click_row = match event {
+            Event::Mouse(mouse_event)
+                if matches!(mouse_event.kind, MouseEventKind::Down(MouseButton::Left)) =>
+            {
+                ctx.local_mouse_position(event).map(|(_, row)| row)
+            }
+            _ => None,
         };
-
         let visible_rows = self.visible_option_rows().max(1);
         let mut emit_change = None;
         let mut did_handle = true;
@@ -464,56 +468,124 @@ impl<M: 'static> Widget<M> for Select<M> {
                 return;
             };
 
-            match key_event.code {
-                KeyCode::Down => {
-                    if !state.is_open {
-                        state.is_open = true;
-                    } else if let Some(position) =
-                        filtered.iter().position(|index| *index == active_index)
-                    {
-                        if position + 1 < filtered.len() {
-                            active_index = filtered[position + 1];
+            match event {
+                Event::Key(key_event) => match key_event.code {
+                    KeyCode::Down => {
+                        if !state.is_open {
+                            state.is_open = true;
+                        } else if let Some(position) =
+                            filtered.iter().position(|index| *index == active_index)
+                        {
+                            if position + 1 < filtered.len() {
+                                active_index = filtered[position + 1];
+                            }
                         }
                     }
-                }
-                KeyCode::Up => {
-                    if !state.is_open {
-                        state.is_open = true;
-                    } else if let Some(position) =
-                        filtered.iter().position(|index| *index == active_index)
-                    {
-                        if position > 0 {
-                            active_index = filtered[position - 1];
+                    KeyCode::Up => {
+                        if !state.is_open {
+                            state.is_open = true;
+                        } else if let Some(position) =
+                            filtered.iter().position(|index| *index == active_index)
+                        {
+                            if position > 0 {
+                                active_index = filtered[position - 1];
+                            }
                         }
                     }
-                }
-                KeyCode::Home if state.is_open => {
-                    if let Some(index) = filtered.first().copied() {
+                    KeyCode::Home if state.is_open => {
+                        if let Some(index) = filtered.first().copied() {
+                            active_index = index;
+                        }
+                    }
+                    KeyCode::End if state.is_open => {
+                        if let Some(index) = filtered.last().copied() {
+                            active_index = index;
+                        }
+                    }
+                    KeyCode::PageUp if state.is_open => {
+                        if let Some(position) =
+                            filtered.iter().position(|index| *index == active_index)
+                        {
+                            active_index = filtered[position.saturating_sub(visible_rows)];
+                        }
+                    }
+                    KeyCode::PageDown if state.is_open => {
+                        if let Some(position) =
+                            filtered.iter().position(|index| *index == active_index)
+                        {
+                            let next =
+                                (position + visible_rows).min(filtered.len().saturating_sub(1));
+                            active_index = filtered[next];
+                        }
+                    }
+                    KeyCode::Enter | KeyCode::Char(' ') => {
+                        if !state.is_open {
+                            state.is_open = true;
+                        } else {
+                            let value = self.options[active_index].value.clone();
+                            state.selected_option = Some(value.clone());
+                            state.selection.replace_selection(value.clone());
+                            state.is_open = false;
+                            state.search_query.clear();
+                            if let Some(ref handler) = self.on_change {
+                                emit_change = Some(handler(value));
+                            }
+                        }
+                    }
+                    KeyCode::Backspace if state.is_open && self.searchable => {
+                        state.search_query.pop();
+                        filtered = self.filtered_indices(state);
+                        if let Some(index) = filtered.first().copied() {
+                            active_index = index;
+                        }
+                    }
+                    KeyCode::Char(c) if self.searchable => {
+                        if !state.is_open {
+                            state.is_open = true;
+                        }
+                        state.search_query.push(c);
+                        filtered = self.filtered_indices(state);
+                        if let Some(index) = filtered.first().copied() {
+                            active_index = index;
+                        }
+                    }
+                    KeyCode::Esc if state.is_open => {
+                        state.is_open = false;
+                        state.search_query.clear();
+                    }
+                    _ => {
+                        did_handle = false;
+                    }
+                },
+                Event::Mouse(mouse_event)
+                    if matches!(mouse_event.kind, MouseEventKind::Down(MouseButton::Left)) =>
+                {
+                    let Some(row) = click_row else {
+                        return;
+                    };
+                    let content_y = u16::from(self.border.is_some());
+                    if row == content_y {
+                        state.is_open = !state.is_open;
+                    } else if state.is_open {
+                        let option_start = content_y + 2 + self.filter_row_offset();
+                        let Some(option_row) = row.checked_sub(option_start) else {
+                            return;
+                        };
+                        let option_row = option_row as usize;
+                        if option_row >= visible_rows {
+                            return;
+                        }
+                        let active_position = filtered
+                            .iter()
+                            .position(|index| *index == active_index)
+                            .unwrap_or_default();
+                        let visible_offset =
+                            ensure_item_visible(state.scroll_offset, active_position, visible_rows);
+                        let filtered_position = visible_offset + option_row;
+                        let Some(index) = filtered.get(filtered_position).copied() else {
+                            return;
+                        };
                         active_index = index;
-                    }
-                }
-                KeyCode::End if state.is_open => {
-                    if let Some(index) = filtered.last().copied() {
-                        active_index = index;
-                    }
-                }
-                KeyCode::PageUp if state.is_open => {
-                    if let Some(position) = filtered.iter().position(|index| *index == active_index)
-                    {
-                        active_index = filtered[position.saturating_sub(visible_rows)];
-                    }
-                }
-                KeyCode::PageDown if state.is_open => {
-                    if let Some(position) = filtered.iter().position(|index| *index == active_index)
-                    {
-                        let next = (position + visible_rows).min(filtered.len().saturating_sub(1));
-                        active_index = filtered[next];
-                    }
-                }
-                KeyCode::Enter | KeyCode::Char(' ') => {
-                    if !state.is_open {
-                        state.is_open = true;
-                    } else {
                         let value = self.options[active_index].value.clone();
                         state.selected_option = Some(value.clone());
                         state.selection.replace_selection(value.clone());
@@ -522,32 +594,11 @@ impl<M: 'static> Widget<M> for Select<M> {
                         if let Some(ref handler) = self.on_change {
                             emit_change = Some(handler(value));
                         }
+                    } else {
+                        return;
                     }
                 }
-                KeyCode::Backspace if state.is_open && self.searchable => {
-                    state.search_query.pop();
-                    filtered = self.filtered_indices(state);
-                    if let Some(index) = filtered.first().copied() {
-                        active_index = index;
-                    }
-                }
-                KeyCode::Char(c) if self.searchable => {
-                    if !state.is_open {
-                        state.is_open = true;
-                    }
-                    state.search_query.push(c);
-                    filtered = self.filtered_indices(state);
-                    if let Some(index) = filtered.first().copied() {
-                        active_index = index;
-                    }
-                }
-                KeyCode::Esc if state.is_open => {
-                    state.is_open = false;
-                    state.search_query.clear();
-                }
-                _ => {
-                    did_handle = false;
-                }
+                _ => return,
             }
 
             set_active_value(state, self.options[active_index].value.clone());

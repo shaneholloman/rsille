@@ -16,7 +16,7 @@ use crate::effect::{
     run_task_attempt, sleep_with_cancellation, CancellationToken, Effect, Task, TaskEvent,
     TaskEventSender, TaskId, TaskState, TaskStatus, UpdateCtx,
 };
-use crate::event::{KeyCode, KeyEvent, KeyModifiers};
+use crate::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEventKind};
 use crate::focus::FocusManager;
 use crate::shell::{CommandRouter, Hotkey, HotkeyRegistry};
 use crate::style::Theme;
@@ -172,7 +172,7 @@ impl<State, M: Clone + std::fmt::Debug + Send + 'static> App<State, M> {
             tick_handlers: Vec::new(),
             frame_handlers: Vec::new(),
             quit_behavior: QuitBehavior::default(),
-            mouse_capture: false,
+            mouse_capture: true,
             inline_mouse_mode: InlineMouseMode::default(),
             motion_policy: MotionPolicy::default(),
             visual_capabilities: TerminalVisualCapabilities::default(),
@@ -290,8 +290,17 @@ impl<State, M: Clone + std::fmt::Debug + Send + 'static> App<State, M> {
     }
 
     /// Enable mouse capture for wheel, click, and drag interactions.
+    ///
+    /// Mouse capture is enabled by default; this method is kept for explicit
+    /// builder chains and backward compatibility.
     pub fn enable_mouse_capture(mut self) -> Self {
         self.mouse_capture = true;
+        self
+    }
+
+    /// Disable mouse capture when an application wants keyboard-only input.
+    pub fn disable_mouse_capture(mut self) -> Self {
+        self.mouse_capture = false;
         self
     }
 
@@ -429,6 +438,7 @@ impl<State, M: Clone + std::fmt::Debug + Send + 'static> App<State, M> {
             animation_epoch: Instant::now(),
             animation_frame: 0,
             render_frame: 0,
+            pointer_capture: None,
             motion_policy,
             visual_capabilities,
             inline_mode,
@@ -516,6 +526,7 @@ struct AppRuntime<State, U, V, M> {
     animation_epoch: Instant,
     animation_frame: u64,
     render_frame: u64,
+    pointer_capture: Option<WidgetPath>,
     motion_policy: MotionPolicy,
     visual_capabilities: TerminalVisualCapabilities,
     inline_mode: bool,
@@ -592,6 +603,22 @@ fn hit_test_path(hit_regions: &[HitRegion], x: u16, y: u16) -> Option<WidgetPath
         .rev()
         .find(|region| region.contains(x, y))
         .map(|region| region.path.clone())
+}
+
+fn mouse_target_path(
+    event: &Event,
+    hit_regions: &[HitRegion],
+    pointer_capture: Option<&WidgetPath>,
+) -> Option<WidgetPath> {
+    let Event::Mouse(mouse) = event else {
+        return None;
+    };
+
+    let hit_path = hit_test_path(hit_regions, mouse.column, mouse.row);
+    match mouse.kind {
+        MouseEventKind::Drag(_) | MouseEventKind::Up(_) => pointer_capture.cloned().or(hit_path),
+        _ => hit_path,
+    }
 }
 
 impl<State, U, V, M: Send + 'static> AppRuntime<State, U, V, M> {
@@ -831,9 +858,10 @@ impl<State, U, V, M: Send + 'static> AppRuntime<State, U, V, M> {
         focus: &mut FocusManager,
         geometry: &HashMap<WidgetPath, render::area::Area>,
         hit_regions: &[HitRegion],
+        pointer_capture: Option<&WidgetPath>,
     ) -> bool {
         let target_path = match mouse_position(event) {
-            Some((x, y)) => hit_test_path(hit_regions, x, y),
+            Some(_) => mouse_target_path(event, hit_regions, pointer_capture),
             None => focus.current_path().cloned(),
         };
         let route = Self::build_event_route(tree, target_path.as_ref());
@@ -1411,6 +1439,23 @@ where
                 continue;
             }
 
+            let pointer_capture = self.pointer_capture.clone();
+            let mouse_target = mouse_target_path(event, &hit_regions, pointer_capture.as_ref());
+            if let Event::Mouse(mouse_event) = event {
+                match mouse_event.kind {
+                    MouseEventKind::Down(MouseButton::Left) => {
+                        self.pointer_capture = mouse_target.clone();
+                        if let Some(path) = mouse_target.as_ref() {
+                            self.focus.request_focus(path);
+                        }
+                    }
+                    MouseEventKind::Up(_) => {
+                        self.pointer_capture = None;
+                    }
+                    _ => {}
+                }
+            }
+
             if Self::dispatch_widget_event(
                 tree.as_ref(),
                 event,
@@ -1419,6 +1464,7 @@ where
                 &mut self.focus,
                 &geometry,
                 &hit_regions,
+                pointer_capture.as_ref(),
             ) {
                 continue;
             }
@@ -1617,5 +1663,32 @@ mod tests {
         assert_eq!(hit_test_path(&regions, 3, 2), Some(upper));
         assert_eq!(hit_test_path(&regions, 1, 1), Some(lower));
         assert_eq!(hit_test_path(&regions, 20, 20), None);
+    }
+
+    #[test]
+    fn mouse_capture_is_enabled_by_default() {
+        let app = App::<(), ()>::new(());
+
+        assert!(app.mouse_capture);
+    }
+
+    #[test]
+    fn drag_events_keep_captured_target_when_pointer_leaves_hit_region() {
+        let captured = WidgetPath::root().child("slider");
+        let regions = vec![HitRegion {
+            path: captured.clone(),
+            area: render::area::Area::new((0, 0).into(), (10, 2).into()),
+        }];
+        let event = Event::Mouse(crossterm::event::MouseEvent {
+            kind: MouseEventKind::Drag(MouseButton::Left),
+            column: 40,
+            row: 20,
+            modifiers: KeyModifiers::empty(),
+        });
+
+        assert_eq!(
+            mouse_target_path(&event, &regions, Some(&captured)),
+            Some(captured)
+        );
     }
 }

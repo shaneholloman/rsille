@@ -2,7 +2,7 @@
 
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-use crate::event::{Event, KeyCode};
+use crate::event::{Event, KeyCode, MouseButton, MouseEventKind};
 use crate::focus::FocusConfig;
 use crate::layout::border_renderer;
 use crate::layout::{ensure_item_visible, Constraints};
@@ -364,12 +364,20 @@ impl<M: 'static> Widget<M> for List<M> {
             return;
         }
 
-        let Event::Key(key_event) = event else {
-            return;
+        let clicked_row = match event {
+            Event::Mouse(mouse_event)
+                if matches!(mouse_event.kind, MouseEventKind::Down(MouseButton::Left)) =>
+            {
+                ctx.local_mouse_position(event).and_then(|(_, row)| {
+                    row.checked_sub(u16::from(self.border.is_some()))
+                        .map(|row| row as usize)
+                })
+            }
+            _ => None,
         };
-
         let visible_rows = self.visible_rows().max(1);
         let mut emit_submit = None;
+        let mut emit_selection = None;
         let mut moved = false;
 
         let next_active_id = {
@@ -378,77 +386,111 @@ impl<M: 'static> Widget<M> for List<M> {
                 return;
             };
 
-            match key_event.code {
-                KeyCode::Up => {
-                    if let Some(index) = self.prev_enabled_index(active_index) {
-                        active_index = index;
-                        moved = true;
-                    }
-                }
-                KeyCode::Down => {
-                    if let Some(index) = self.next_enabled_index(active_index) {
-                        active_index = index;
-                        moved = true;
-                    }
-                }
-                KeyCode::Home => {
-                    if let Some(index) = self.first_enabled_index() {
-                        active_index = index;
-                        moved = true;
-                    }
-                }
-                KeyCode::End => {
-                    if let Some(index) = self.last_enabled_index() {
-                        active_index = index;
-                        moved = true;
-                    }
-                }
-                KeyCode::PageUp => {
-                    for _ in 0..visible_rows {
+            match event {
+                Event::Key(key_event) => match key_event.code {
+                    KeyCode::Up => {
                         if let Some(index) = self.prev_enabled_index(active_index) {
                             active_index = index;
                             moved = true;
-                        } else {
-                            break;
                         }
                     }
-                }
-                KeyCode::PageDown => {
-                    for _ in 0..visible_rows {
+                    KeyCode::Down => {
                         if let Some(index) = self.next_enabled_index(active_index) {
                             active_index = index;
                             moved = true;
-                        } else {
-                            break;
                         }
                     }
-                }
-                KeyCode::Enter => {
+                    KeyCode::Home => {
+                        if let Some(index) = self.first_enabled_index() {
+                            active_index = index;
+                            moved = true;
+                        }
+                    }
+                    KeyCode::End => {
+                        if let Some(index) = self.last_enabled_index() {
+                            active_index = index;
+                            moved = true;
+                        }
+                    }
+                    KeyCode::PageUp => {
+                        for _ in 0..visible_rows {
+                            if let Some(index) = self.prev_enabled_index(active_index) {
+                                active_index = index;
+                                moved = true;
+                            } else {
+                                break;
+                            }
+                        }
+                    }
+                    KeyCode::PageDown => {
+                        for _ in 0..visible_rows {
+                            if let Some(index) = self.next_enabled_index(active_index) {
+                                active_index = index;
+                                moved = true;
+                            } else {
+                                break;
+                            }
+                        }
+                    }
+                    KeyCode::Enter => {
+                        let active_id = self.items[active_index].id.clone();
+                        if self.selection_mode == SelectionMode::Single {
+                            state.selection.replace_selection(active_id.clone());
+                        }
+                        if let Some(ref handler) = self.on_submit {
+                            emit_submit = Some(handler(active_id));
+                        }
+                        ctx.set_handled();
+                        if let Some(message) = emit_submit {
+                            ctx.emit(message);
+                        }
+                        return;
+                    }
+                    KeyCode::Char(' ') if self.selection_mode.is_multiple() => {
+                        let active_id = self.items[active_index].id.clone();
+                        state.selection.toggle(&active_id);
+                        let emit_selection = self
+                            .on_selection_change
+                            .as_ref()
+                            .map(|handler| handler(state.selection.selected.clone()));
+                        ctx.set_handled();
+                        if let Some(message) = emit_selection {
+                            ctx.emit(message);
+                        }
+                        return;
+                    }
+                    _ => return,
+                },
+                Event::Mouse(mouse_event)
+                    if matches!(mouse_event.kind, MouseEventKind::Down(MouseButton::Left)) =>
+                {
+                    let Some(row) = clicked_row else {
+                        return;
+                    };
+                    if row >= visible_rows {
+                        return;
+                    }
+                    let mut visible_offset =
+                        state.scroll_offset.min(self.items.len().saturating_sub(1));
+                    visible_offset =
+                        ensure_item_visible(visible_offset, active_index, visible_rows);
+                    let index = visible_offset + row;
+                    if index >= self.items.len() || self.items[index].disabled {
+                        return;
+                    }
+                    active_index = index;
+                    moved = true;
+
                     let active_id = self.items[active_index].id.clone();
                     if self.selection_mode == SelectionMode::Single {
-                        state.selection.replace_selection(active_id.clone());
+                        state.selection.replace_selection(active_id);
+                    } else {
+                        state.selection.toggle(&active_id);
+                        emit_selection = self
+                            .on_selection_change
+                            .as_ref()
+                            .map(|handler| handler(state.selection.selected.clone()));
                     }
-                    if let Some(ref handler) = self.on_submit {
-                        emit_submit = Some(handler(active_id));
-                    }
-                    ctx.set_handled();
-                    if let Some(message) = emit_submit {
-                        ctx.emit(message);
-                    }
-                    return;
-                }
-                KeyCode::Char(' ') if self.selection_mode.is_multiple() => {
-                    let active_id = self.items[active_index].id.clone();
-                    state.selection.toggle(&active_id);
-                    let emit_selection = self
-                        .on_selection_change
-                        .as_ref()
-                        .map(|handler| handler(state.selection.selected.clone()));
-                    ctx.set_handled();
-                    if let Some(message) = emit_selection {
-                        ctx.emit(message);
-                    }
-                    return;
                 }
                 _ => return,
             }
@@ -464,6 +506,9 @@ impl<M: 'static> Widget<M> for List<M> {
             ctx.set_handled();
             if let (Some(active_id), Some(handler)) = (next_active_id, self.on_change.as_ref()) {
                 ctx.emit(handler(active_id));
+            }
+            if let Some(message) = emit_selection {
+                ctx.emit(message);
             }
         }
     }

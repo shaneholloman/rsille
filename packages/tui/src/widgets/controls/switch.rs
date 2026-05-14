@@ -2,7 +2,7 @@
 
 use unicode_width::UnicodeWidthStr;
 
-use crate::event::{Event, KeyCode};
+use crate::event::{Event, KeyCode, MouseButton, MouseEventKind};
 use crate::focus::FocusConfig;
 use crate::layout::Constraints;
 use crate::style::Style;
@@ -121,11 +121,15 @@ impl<M> Widget<M> for Switch<M> {
             return;
         }
 
-        let Event::Key(key_event) = event else {
-            return;
+        let activated = match event {
+            Event::Key(key_event) => matches!(key_event.code, KeyCode::Enter | KeyCode::Char(' ')),
+            Event::Mouse(mouse_event) => {
+                matches!(mouse_event.kind, MouseEventKind::Down(MouseButton::Left))
+            }
+            _ => false,
         };
 
-        if matches!(key_event.code, KeyCode::Enter | KeyCode::Char(' ')) {
+        if activated {
             ctx.set_handled();
             if let Some(handler) = self.on_change.as_ref() {
                 ctx.emit(handler(!self.checked));

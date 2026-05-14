@@ -12,7 +12,9 @@ pub use crate::effect::{
     UpdateCtx,
 };
 pub use crate::error::{WidgetError, WidgetResult};
-pub use crate::event::{Event, KeyCode, KeyEvent, KeyModifiers};
+pub use crate::event::{
+    Event, KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+};
 pub use crate::focus::{FocusConfig, FocusScope, ScopeEntry};
 pub use crate::layout::{
     clamp_scroll_offset, col, ensure_item_visible, grid, max_scroll_offset, overlay, row,

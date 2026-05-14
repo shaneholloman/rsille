@@ -1,6 +1,6 @@
 //! Button widget — focusable interactive button
 
-use crate::event::{Event, KeyCode};
+use crate::event::{Event, KeyCode, MouseButton, MouseEventKind};
 use crate::focus::FocusConfig;
 use crate::layout::Constraints;
 use crate::style::{Style, Theme};
@@ -188,12 +188,24 @@ impl<M> Widget<M> for Button<M> {
         if self.disabled {
             return;
         }
-        if let Event::Key(key_event) = event {
-            if matches!(key_event.code, KeyCode::Enter | KeyCode::Char(' ')) {
-                if let Some(ref handler) = self.on_click {
-                    ctx.emit(handler());
+        match event {
+            Event::Key(key_event) => {
+                if matches!(key_event.code, KeyCode::Enter | KeyCode::Char(' ')) {
+                    if let Some(ref handler) = self.on_click {
+                        ctx.emit(handler());
+                    }
                 }
             }
+            Event::Mouse(mouse_event) => {
+                if matches!(mouse_event.kind, MouseEventKind::Down(MouseButton::Left)) {
+                    if let Some(ref handler) = self.on_click {
+                        ctx.emit(handler());
+                    } else {
+                        ctx.set_handled();
+                    }
+                }
+            }
+            _ => {}
         }
     }
 
@@ -301,6 +313,37 @@ mod tests {
 
         assert_ne!(cell_char(&buffer, 0, 0), Some('>'));
         assert_ne!(cell_char(&buffer, 5, 0), Some('<'));
+    }
+
+    #[test]
+    fn left_click_emits_click_message() {
+        let button = button("OK").on_click(|| "clicked");
+        let mut store = WidgetStore::new();
+        let mut messages = Vec::new();
+        let path = WidgetPath::root();
+        let id = crate::widget::WidgetId::root();
+        let mut geometry = HashMap::new();
+        geometry.insert(path.clone(), Area::new((0, 0).into(), (6, 1).into()));
+        let event = Event::Mouse(crossterm::event::MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 2,
+            row: 0,
+            modifiers: crate::event::KeyModifiers::empty(),
+        });
+        let mut ctx = crate::widget::EventCtx::new(
+            &mut store,
+            &mut messages,
+            path,
+            id,
+            None,
+            &geometry,
+            crate::widget::EventPhase::Target,
+            false,
+        );
+
+        button.handle_event(&event, &mut ctx);
+
+        assert_eq!(messages, vec!["clicked"]);
     }
 
     fn render_button(button: &Button<()>, width: u16, height: u16, focused: bool) -> Buffer {

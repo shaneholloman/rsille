@@ -1111,6 +1111,30 @@ impl<'a, M> EventCtx<'a, M> {
         self.geometry.get(path).copied()
     }
 
+    /// Absolute terminal mouse coordinates for a mouse event.
+    pub fn mouse_position(&self, event: &Event) -> Option<(u16, u16)> {
+        match event {
+            Event::Mouse(mouse) => Some((mouse.column, mouse.row)),
+            _ => None,
+        }
+    }
+
+    /// Mouse coordinates relative to the current widget bounds.
+    pub fn local_mouse_position(&self, event: &Event) -> Option<(u16, u16)> {
+        let (x, y) = self.mouse_position(event)?;
+        let bounds = self.bounds()?;
+
+        if x < bounds.x()
+            || x >= bounds.x().saturating_add(bounds.width())
+            || y < bounds.y()
+            || y >= bounds.y().saturating_add(bounds.height())
+        {
+            return None;
+        }
+
+        Some((x.saturating_sub(bounds.x()), y.saturating_sub(bounds.y())))
+    }
+
     /// Mark the event as handled.
     pub fn set_handled(&mut self) {
         self.handled = true;

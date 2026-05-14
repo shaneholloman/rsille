@@ -2,7 +2,7 @@
 
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-use crate::event::{Event, KeyCode};
+use crate::event::{Event, KeyCode, MouseButton, MouseEventKind};
 use crate::focus::FocusConfig;
 use crate::layout::border_renderer;
 use crate::layout::{ensure_item_visible, Constraints};
@@ -289,11 +289,7 @@ impl<M: 'static> Widget<M> for Menu<M> {
             return;
         }
 
-        let Event::Key(key_event) = event else {
-            return;
-        };
-
-        if matches!(key_event.code, KeyCode::Esc) {
+        if matches!(event, Event::Key(key_event) if key_event.code == KeyCode::Esc) {
             ctx.set_handled();
             if let Some(handler) = self.on_close.as_ref() {
                 ctx.emit(handler());
@@ -305,6 +301,17 @@ impl<M: 'static> Widget<M> for Menu<M> {
             return;
         }
 
+        let clicked_row = match event {
+            Event::Mouse(mouse_event)
+                if matches!(mouse_event.kind, MouseEventKind::Down(MouseButton::Left)) =>
+            {
+                ctx.local_mouse_position(event).and_then(|(_, row)| {
+                    row.checked_sub(u16::from(self.border.is_some()))
+                        .map(|row| row as usize)
+                })
+            }
+            _ => None,
+        };
         let visible_rows = (self
             .height
             .saturating_sub(if self.border.is_some() { 2 } else { 0 }))
@@ -316,46 +323,69 @@ impl<M: 'static> Widget<M> for Menu<M> {
                 return;
             };
 
-            match key_event.code {
-                KeyCode::Up => {
-                    if let Some(index) = self.prev_enabled_index(active_index) {
-                        active_index = index;
-                    }
-                }
-                KeyCode::Down => {
-                    if let Some(index) = self.next_enabled_index(active_index) {
-                        active_index = index;
-                    }
-                }
-                KeyCode::Home => {
-                    if let Some(index) = self.first_enabled_index() {
-                        active_index = index;
-                    }
-                }
-                KeyCode::End => {
-                    if let Some(index) = self.last_enabled_index() {
-                        active_index = index;
-                    }
-                }
-                KeyCode::PageUp => {
-                    for _ in 0..visible_rows {
+            match event {
+                Event::Key(key_event) => match key_event.code {
+                    KeyCode::Up => {
                         if let Some(index) = self.prev_enabled_index(active_index) {
                             active_index = index;
-                        } else {
-                            break;
                         }
                     }
-                }
-                KeyCode::PageDown => {
-                    for _ in 0..visible_rows {
+                    KeyCode::Down => {
                         if let Some(index) = self.next_enabled_index(active_index) {
                             active_index = index;
-                        } else {
-                            break;
                         }
                     }
-                }
-                KeyCode::Enter | KeyCode::Char(' ') => {
+                    KeyCode::Home => {
+                        if let Some(index) = self.first_enabled_index() {
+                            active_index = index;
+                        }
+                    }
+                    KeyCode::End => {
+                        if let Some(index) = self.last_enabled_index() {
+                            active_index = index;
+                        }
+                    }
+                    KeyCode::PageUp => {
+                        for _ in 0..visible_rows {
+                            if let Some(index) = self.prev_enabled_index(active_index) {
+                                active_index = index;
+                            } else {
+                                break;
+                            }
+                        }
+                    }
+                    KeyCode::PageDown => {
+                        for _ in 0..visible_rows {
+                            if let Some(index) = self.next_enabled_index(active_index) {
+                                active_index = index;
+                            } else {
+                                break;
+                            }
+                        }
+                    }
+                    KeyCode::Enter | KeyCode::Char(' ') => {
+                        select_id = Some(self.items[active_index].id.clone());
+                    }
+                    _ => return,
+                },
+                Event::Mouse(mouse_event)
+                    if matches!(mouse_event.kind, MouseEventKind::Down(MouseButton::Left)) =>
+                {
+                    let Some(row) = clicked_row else {
+                        return;
+                    };
+                    if row >= visible_rows {
+                        return;
+                    }
+                    let mut visible_offset =
+                        state.scroll_offset.min(self.items.len().saturating_sub(1));
+                    visible_offset =
+                        ensure_item_visible(visible_offset, active_index, visible_rows);
+                    let index = visible_offset + row;
+                    if index >= self.items.len() || self.items[index].disabled {
+                        return;
+                    }
+                    active_index = index;
                     select_id = Some(self.items[active_index].id.clone());
                 }
                 _ => return,

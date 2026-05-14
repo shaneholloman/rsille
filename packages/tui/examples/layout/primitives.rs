@@ -23,7 +23,6 @@ enum Msg {
 
 fn main() -> WidgetResult<()> {
     App::new(State::default())
-        .enable_mouse_capture()
         .on_key(KeyCode::Char('p'), || Msg::TogglePalette)
         .run_inline(update, view)
 }

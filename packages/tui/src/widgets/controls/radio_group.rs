@@ -2,7 +2,7 @@
 
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-use crate::event::{Event, KeyCode};
+use crate::event::{Event, KeyCode, MouseButton, MouseEventKind};
 use crate::focus::FocusConfig;
 use crate::layout::Constraints;
 use crate::style::Style;
@@ -237,10 +237,14 @@ impl<M: 'static> Widget<M> for RadioGroup<M> {
             return;
         }
 
-        let Event::Key(key_event) = event else {
-            return;
+        let clicked_index = match event {
+            Event::Mouse(mouse_event)
+                if matches!(mouse_event.kind, MouseEventKind::Down(MouseButton::Left)) =>
+            {
+                ctx.local_mouse_position(event).map(|(_, row)| row as usize)
+            }
+            _ => None,
         };
-
         let mut next_value = None;
         {
             let state = ctx.state_mut::<RadioGroupState>();
@@ -248,28 +252,42 @@ impl<M: 'static> Widget<M> for RadioGroup<M> {
                 return;
             };
 
-            match key_event.code {
-                KeyCode::Up | KeyCode::Left => {
-                    if let Some(index) = self.prev_enabled_index(active_index) {
-                        active_index = index;
+            match event {
+                Event::Key(key_event) => match key_event.code {
+                    KeyCode::Up | KeyCode::Left => {
+                        if let Some(index) = self.prev_enabled_index(active_index) {
+                            active_index = index;
+                        }
                     }
-                }
-                KeyCode::Down | KeyCode::Right => {
-                    if let Some(index) = self.next_enabled_index(active_index) {
-                        active_index = index;
+                    KeyCode::Down | KeyCode::Right => {
+                        if let Some(index) = self.next_enabled_index(active_index) {
+                            active_index = index;
+                        }
                     }
-                }
-                KeyCode::Home => {
-                    if let Some(index) = self.first_enabled_index() {
-                        active_index = index;
+                    KeyCode::Home => {
+                        if let Some(index) = self.first_enabled_index() {
+                            active_index = index;
+                        }
                     }
-                }
-                KeyCode::End => {
-                    if let Some(index) = self.last_enabled_index() {
-                        active_index = index;
+                    KeyCode::End => {
+                        if let Some(index) = self.last_enabled_index() {
+                            active_index = index;
+                        }
                     }
+                    KeyCode::Enter | KeyCode::Char(' ') => {}
+                    _ => return,
+                },
+                Event::Mouse(mouse_event)
+                    if matches!(mouse_event.kind, MouseEventKind::Down(MouseButton::Left)) =>
+                {
+                    let Some(index) = clicked_index else {
+                        return;
+                    };
+                    if index >= self.options.len() || self.options[index].disabled {
+                        return;
+                    }
+                    active_index = index;
                 }
-                KeyCode::Enter | KeyCode::Char(' ') => {}
                 _ => return,
             }
 

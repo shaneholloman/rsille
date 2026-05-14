@@ -2,7 +2,7 @@
 
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-use crate::event::{Event, KeyCode};
+use crate::event::{Event, KeyCode, MouseButton, MouseEventKind};
 use crate::focus::FocusConfig;
 use crate::layout::Constraints;
 use crate::style::Style;
@@ -182,6 +182,19 @@ impl<M> Tabs<M> {
             .find(|(_, item)| !item.disabled)
             .map(|(index, _)| index)
     }
+
+    fn index_at_column(&self, column: u16) -> Option<usize> {
+        let mut x = 0u16;
+        for (index, item) in self.items.iter().enumerate() {
+            let width = item.label.width() as u16 + 3;
+            if column >= x && column < x.saturating_add(width) {
+                return (!item.disabled).then_some(index);
+            }
+            x = x.saturating_add(width + 1);
+        }
+
+        None
+    }
 }
 
 impl<M> Default for Tabs<M> {
@@ -246,10 +259,16 @@ impl<M: 'static> Widget<M> for Tabs<M> {
             return;
         }
 
-        let Event::Key(key_event) = event else {
-            return;
+        let clicked_index = match event {
+            Event::Mouse(mouse_event)
+                if matches!(mouse_event.kind, MouseEventKind::Down(MouseButton::Left)) =>
+            {
+                ctx.local_mouse_position(event)
+                    .and_then(|(column, row)| (row == 0).then_some(column))
+                    .and_then(|column| self.index_at_column(column))
+            }
+            _ => None,
         };
-
         let mut next_value = None;
         {
             let state = ctx.state_mut::<TabsState>();
@@ -257,28 +276,39 @@ impl<M: 'static> Widget<M> for Tabs<M> {
                 return;
             };
 
-            match key_event.code {
-                KeyCode::Left | KeyCode::Up => {
-                    if let Some(index) = self.prev_enabled_index(active_index) {
-                        active_index = index;
+            match event {
+                Event::Key(key_event) => match key_event.code {
+                    KeyCode::Left | KeyCode::Up => {
+                        if let Some(index) = self.prev_enabled_index(active_index) {
+                            active_index = index;
+                        }
                     }
-                }
-                KeyCode::Right | KeyCode::Down => {
-                    if let Some(index) = self.next_enabled_index(active_index) {
-                        active_index = index;
+                    KeyCode::Right | KeyCode::Down => {
+                        if let Some(index) = self.next_enabled_index(active_index) {
+                            active_index = index;
+                        }
                     }
-                }
-                KeyCode::Home => {
-                    if let Some(index) = self.first_enabled_index() {
-                        active_index = index;
+                    KeyCode::Home => {
+                        if let Some(index) = self.first_enabled_index() {
+                            active_index = index;
+                        }
                     }
-                }
-                KeyCode::End => {
-                    if let Some(index) = self.last_enabled_index() {
-                        active_index = index;
+                    KeyCode::End => {
+                        if let Some(index) = self.last_enabled_index() {
+                            active_index = index;
+                        }
                     }
+                    KeyCode::Enter | KeyCode::Char(' ') => {}
+                    _ => return,
+                },
+                Event::Mouse(mouse_event)
+                    if matches!(mouse_event.kind, MouseEventKind::Down(MouseButton::Left)) =>
+                {
+                    let Some(index) = clicked_index else {
+                        return;
+                    };
+                    active_index = index;
                 }
-                KeyCode::Enter | KeyCode::Char(' ') => {}
                 _ => return,
             }
 
