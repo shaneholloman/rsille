@@ -6,10 +6,10 @@ use unicode_width::UnicodeWidthStr;
 use super::border_renderer::{render_background, render_border};
 use crate::event::{Event, KeyCode, MouseEventKind};
 use crate::focus::FocusConfig;
-use crate::layout::Constraints;
+use crate::layout::{AxisLimit, Constraints, MeasuredSize, SizeProposal};
 use crate::offscreen::{blit_region, render_to_offscreen, BlitOptions, BlitRegion};
 use crate::style::{BorderStyle, Padding, Style};
-use crate::widget::{EventCtx, EventPhase, IntoWidget, RenderCtx, Widget, WidgetKey};
+use crate::widget::{EventCtx, EventPhase, IntoWidget, MeasureCtx, RenderCtx, Widget, WidgetKey};
 
 /// Axis support for scrollable containers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -429,7 +429,11 @@ impl<M> ScrollView<M> {
         self
     }
 
-    fn resolve_metrics(&self, outer: Area) -> Option<ScrollMetrics> {
+    fn resolve_metrics(
+        &self,
+        outer: Area,
+        measure_ctx: Option<&MeasureCtx>,
+    ) -> Option<ScrollMetrics> {
         let border_area = if self.border.is_some() {
             if outer.width() < 2 || outer.height() < 2 {
                 return None;
@@ -452,23 +456,14 @@ impl<M> ScrollView<M> {
             return None;
         }
 
-        let child_constraints = self.child.constraints();
-        let base_content_width = usize::from(
-            self.content_width
-                .unwrap_or(child_constraints.min_width.max(inner.width())),
-        );
-        let base_content_height = usize::from(
-            self.content_height
-                .unwrap_or(child_constraints.min_height.max(inner.height())),
-        );
-
         let mut viewport = inner;
         let mut show_vertical_bar = false;
         let mut show_horizontal_bar = false;
 
         for _ in 0..3 {
-            let content_width = base_content_width.max(viewport.width() as usize);
-            let content_height = base_content_height.max(viewport.height() as usize);
+            let (content_width, content_height) = self.resolve_content_size(viewport, measure_ctx);
+            let content_width = content_width.max(viewport.width() as usize);
+            let content_height = content_height.max(viewport.height() as usize);
 
             let next_vertical_bar = self.axis.allows_vertical()
                 && (matches!(self.scrollbar_visibility, ScrollbarVisibility::Always)
@@ -500,13 +495,54 @@ impl<M> ScrollView<M> {
             );
         }
 
+        let (content_width, content_height) = self.resolve_content_size(viewport, measure_ctx);
         Some(ScrollMetrics {
             viewport,
-            content_width: base_content_width.max(viewport.width() as usize),
-            content_height: base_content_height.max(viewport.height() as usize),
+            content_width: content_width.max(viewport.width() as usize),
+            content_height: content_height.max(viewport.height() as usize),
             show_horizontal_bar,
             show_vertical_bar,
         })
+    }
+
+    fn resolve_content_size(
+        &self,
+        viewport: Area,
+        measure_ctx: Option<&MeasureCtx>,
+    ) -> (usize, usize) {
+        if let Some(ctx) = measure_ctx {
+            let width = self.content_width.map(AxisLimit::Exact).unwrap_or_else(|| {
+                if self.axis.allows_horizontal() {
+                    AxisLimit::Unbounded
+                } else {
+                    AxisLimit::Exact(viewport.width())
+                }
+            });
+            let height = self
+                .content_height
+                .map(AxisLimit::Exact)
+                .unwrap_or_else(|| {
+                    if self.axis.allows_vertical() {
+                        AxisLimit::Unbounded
+                    } else {
+                        AxisLimit::Exact(viewport.height())
+                    }
+                });
+            let child_ctx = ctx.child_ctx(WidgetKey::for_child(0, self.child.as_ref()));
+            let measured = self
+                .child
+                .measure(SizeProposal { width, height }, &child_ctx);
+            return (
+                usize::from(self.content_width.unwrap_or(measured.width)),
+                usize::from(self.content_height.unwrap_or(measured.height)),
+            );
+        }
+
+        let child_constraints = self.child.constraints();
+        (
+            usize::from(self.content_width.unwrap_or(child_constraints.min_width)),
+            usize::from(self.content_height.unwrap_or(child_constraints.min_height)),
+        )
     }
 
     fn copy_visible_region(
@@ -559,7 +595,8 @@ impl<M> Widget<M> for ScrollView<M> {
             render_border(chunk, border, border_render_style);
         }
 
-        let Some(metrics) = self.resolve_metrics(area) else {
+        let measure_ctx = ctx.measure_ctx();
+        let Some(metrics) = self.resolve_metrics(area, Some(&measure_ctx)) else {
             return;
         };
         if metrics.viewport.width() == 0 || metrics.viewport.height() == 0 {
@@ -579,7 +616,9 @@ impl<M> Widget<M> for ScrollView<M> {
             metrics.content_height.min(u16::MAX as usize) as u16,
         )
             .into();
-        let child_ctx = ctx.child_ctx(WidgetKey::for_child(0, self.child.as_ref()));
+        let child_ctx = ctx
+            .child_ctx(WidgetKey::for_child(0, self.child.as_ref()))
+            .with_hit_area(None);
         let Some(offscreen) = render_to_offscreen(
             Area::new((0, 0).into(), offscreen_size),
             |offscreen_chunk| {
@@ -664,7 +703,7 @@ impl<M> Widget<M> for ScrollView<M> {
         let Some(bounds) = ctx.bounds() else {
             return;
         };
-        let Some(metrics) = self.resolve_metrics(bounds) else {
+        let Some(metrics) = self.resolve_metrics(bounds, None) else {
             return;
         };
 
@@ -875,6 +914,53 @@ impl<M> Widget<M> for ScrollView<M> {
         }
     }
 
+    fn measure(&self, proposal: SizeProposal, ctx: &MeasureCtx) -> MeasuredSize {
+        let chrome_width =
+            self.padding.horizontal_total() + if self.border.is_some() { 2 } else { 0 };
+        let chrome_height =
+            self.padding.vertical_total() + if self.border.is_some() { 2 } else { 0 };
+
+        let available_width = proposal.width.exact_or_at_most().unwrap_or_else(|| {
+            self.content_width
+                .unwrap_or_else(|| {
+                    let child_ctx = ctx.child_ctx(WidgetKey::for_child(0, self.child.as_ref()));
+                    self.child
+                        .measure(SizeProposal::UNBOUNDED, &child_ctx)
+                        .width
+                })
+                .saturating_add(chrome_width)
+        });
+        let available_height = proposal.height.exact_or_at_most().unwrap_or_else(|| {
+            self.content_height
+                .unwrap_or_else(|| {
+                    let child_ctx = ctx.child_ctx(WidgetKey::for_child(0, self.child.as_ref()));
+                    self.child
+                        .measure(SizeProposal::UNBOUNDED, &child_ctx)
+                        .height
+                })
+                .saturating_add(chrome_height)
+        });
+
+        let outer = Area::new((0, 0).into(), (available_width, available_height).into());
+        let Some(metrics) = self.resolve_metrics(outer, Some(ctx)) else {
+            return self.layout_style().resolve_fallback_size(proposal);
+        };
+
+        let scrollbar_width = u16::from(metrics.show_vertical_bar);
+        let scrollbar_height = u16::from(metrics.show_horizontal_bar);
+        let natural_width = (metrics.content_width.min(u16::MAX as usize) as u16)
+            .saturating_add(chrome_width)
+            .saturating_add(scrollbar_width);
+        let natural_height = (metrics.content_height.min(u16::MAX as usize) as u16)
+            .saturating_add(chrome_height)
+            .saturating_add(scrollbar_height);
+
+        self.layout_style().clamp_size(MeasuredSize::new(
+            fit_axis(natural_width, proposal.width),
+            fit_axis(natural_height, proposal.height),
+        ))
+    }
+
     fn children(&self) -> &[Box<dyn Widget<M>>] {
         std::slice::from_ref(&self.child)
     }
@@ -925,6 +1011,9 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::style::Theme;
+    use crate::widget::{MeasureCtx, Widget, WidgetStore};
+    use crate::widgets::{label, TextWrap};
 
     #[test]
     fn clamp_offset_stays_in_range() {
@@ -938,5 +1027,49 @@ mod tests {
         assert_eq!(ensure_item_visible(0, 2, 5), 0);
         assert_eq!(ensure_item_visible(0, 5, 5), 1);
         assert_eq!(ensure_item_visible(4, 2, 5), 2);
+    }
+
+    #[test]
+    fn scroll_view_measures_wrapped_child_content_against_viewport_width() {
+        let child = label::<()>("alpha beta gamma delta").wrap(TextWrap::Word);
+        let scroll = ScrollView::new(child).vertical();
+        let store = WidgetStore::new();
+        let theme = Theme::dark();
+        let ctx = MeasureCtx::new(&store, &theme);
+
+        let measured = scroll.measure(SizeProposal::at_most(8, 3), &ctx);
+        let metrics = scroll
+            .resolve_metrics(Area::new((0, 0).into(), (8, 3).into()), Some(&ctx))
+            .expect("scroll metrics");
+
+        assert_eq!(measured, MeasuredSize::new(8, 3));
+        assert!(metrics.content_height > metrics.viewport.height() as usize);
+        assert!(metrics.show_vertical_bar);
+    }
+
+    #[test]
+    fn both_axis_scrollbar_feedback_shrinks_viewport_on_second_pass() {
+        let child = label::<()>("0123456789\n0123456789\n0123456789\n0123456789\n0123456789");
+        let scroll = ScrollView::new(child).both();
+        let store = WidgetStore::new();
+        let theme = Theme::dark();
+        let ctx = MeasureCtx::new(&store, &theme);
+
+        let metrics = scroll
+            .resolve_metrics(Area::new((0, 0).into(), (8, 4).into()), Some(&ctx))
+            .expect("scroll metrics");
+
+        assert!(metrics.show_horizontal_bar);
+        assert!(metrics.show_vertical_bar);
+        assert_eq!(metrics.viewport.width(), 7);
+        assert_eq!(metrics.viewport.height(), 3);
+    }
+}
+
+fn fit_axis(natural: u16, proposal: AxisLimit) -> u16 {
+    match proposal {
+        AxisLimit::Unbounded => natural,
+        AxisLimit::AtMost(max) => natural.min(max),
+        AxisLimit::Exact(value) => value,
     }
 }

@@ -6,7 +6,7 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 use crate::event::{Event, KeyCode};
 use crate::focus::FocusConfig;
 use crate::layout::border_renderer;
-use crate::layout::{ensure_item_visible, Constraints};
+use crate::layout::{ensure_item_visible, Constraints, LayoutStyle};
 use crate::style::{BorderStyle, Style};
 use crate::widget::{EventCtx, EventPhase, RenderCtx, Widget};
 
@@ -588,26 +588,19 @@ impl<M: 'static> Widget<M> for Tree<M> {
     }
 
     fn constraints(&self) -> Constraints {
-        fn deepest_width(items: &[TreeItem], depth: usize) -> u16 {
-            items
-                .iter()
-                .map(|item| {
-                    let own = (depth * 2) as u16 + item.label.width() as u16 + 2;
-                    own.max(deepest_width(&item.children, depth + 1))
-                })
-                .max()
-                .unwrap_or(12)
-        }
-
-        let border_size = if self.border.is_some() { 2 } else { 0 };
-
         Constraints {
-            min_width: deepest_width(&self.items, 0) + border_size,
+            min_width: self.preferred_width(),
             max_width: None,
             min_height: self.height,
             max_height: Some(self.height),
             flex: Some(1.0),
         }
+    }
+
+    fn layout_style(&self) -> LayoutStyle {
+        let mut style = LayoutStyle::from_constraints(self.constraints());
+        style.preferred_width = Some(self.preferred_width());
+        style
     }
 
     fn focus_config(&self) -> FocusConfig {
@@ -634,4 +627,21 @@ fn active_item_id(state: &TreeState) -> Option<String> {
         .cursor
         .clone()
         .or_else(|| state.active_item.clone())
+}
+
+impl<M> Tree<M> {
+    fn preferred_width(&self) -> u16 {
+        fn deepest_width(items: &[TreeItem], depth: usize) -> u16 {
+            items
+                .iter()
+                .map(|item| {
+                    let own = (depth * 2) as u16 + item.label.width() as u16 + 2;
+                    own.max(deepest_width(&item.children, depth + 1))
+                })
+                .max()
+                .unwrap_or(12)
+        }
+
+        deepest_width(&self.items, 0).saturating_add(if self.border.is_some() { 2 } else { 0 })
+    }
 }

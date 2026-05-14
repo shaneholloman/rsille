@@ -5,7 +5,7 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 use crate::event::{Event, KeyCode, KeyModifiers};
 use crate::focus::FocusConfig;
 use crate::layout::border_renderer;
-use crate::layout::{ensure_item_visible, Constraints};
+use crate::layout::{ensure_item_visible, Constraints, LayoutStyle};
 use crate::style::{BorderStyle, Style};
 use crate::widget::{EventCtx, EventPhase, RenderCtx, Widget};
 
@@ -966,22 +966,19 @@ impl<M: 'static> Widget<M> for DataTable<M> {
     }
 
     fn constraints(&self) -> Constraints {
-        let separator_width = self.columns.len().saturating_sub(1) as u16;
-        let content_width = self
-            .columns
-            .iter()
-            .map(|column| column.width.max(column.title.width() as u16))
-            .sum::<u16>()
-            + separator_width;
-        let border_size = if self.border.is_some() { 2 } else { 0 };
-
         Constraints {
-            min_width: content_width.max(16) + border_size,
+            min_width: self.preferred_width(),
             max_width: None,
             min_height: self.height,
             max_height: Some(self.height),
             flex: Some(1.0),
         }
+    }
+
+    fn layout_style(&self) -> LayoutStyle {
+        let mut style = LayoutStyle::from_constraints(self.constraints());
+        style.preferred_width = Some(self.preferred_width());
+        style
     }
 
     fn focus_config(&self) -> FocusConfig {
@@ -1020,6 +1017,21 @@ fn sync_state_aliases(state: &mut DataTableState) {
         state.selection.cursor = state.active_row.clone();
     } else if state.active_row.is_none() {
         state.active_row = state.selection.cursor.clone();
+    }
+}
+
+impl<M> DataTable<M> {
+    fn preferred_width(&self) -> u16 {
+        let visible = self.visible_columns();
+        let separator_width = visible.len().saturating_sub(1) as u16;
+        let content_width = visible
+            .iter()
+            .map(|(_, column)| column.width.max(column.title.width() as u16))
+            .sum::<u16>()
+            .saturating_add(separator_width);
+        content_width
+            .max(16)
+            .saturating_add(if self.border.is_some() { 2 } else { 0 })
     }
 }
 

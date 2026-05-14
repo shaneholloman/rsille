@@ -9,9 +9,9 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 use crate::event::{Event, KeyCode};
 use crate::focus::FocusConfig;
 use crate::layout::border_renderer;
-use crate::layout::{ensure_item_visible, Constraints};
+use crate::layout::{ensure_item_visible, AxisLimit, Constraints, MeasuredSize, SizeProposal};
 use crate::style::{BorderStyle, Color, Style};
-use crate::widget::{EventCtx, EventPhase, RenderCtx, Widget};
+use crate::widget::{EventCtx, EventPhase, MeasureCtx, RenderCtx, Widget};
 
 static SYNTAX_SET: Lazy<SyntaxSet> = Lazy::new(SyntaxSet::load_defaults_newlines);
 static THEME_SET: Lazy<ThemeSet> = Lazy::new(ThemeSet::load_defaults);
@@ -177,6 +177,17 @@ impl<M: 'static> Widget<M> for CodeViewer<M> {
         content_constraints(self.height, self.border, 24)
     }
 
+    fn measure(&self, proposal: SizeProposal, _ctx: &MeasureCtx) -> MeasuredSize {
+        measure_text_viewer(
+            self.code.lines(),
+            self.height,
+            self.border,
+            proposal,
+            code_line_number_width(self.code.lines().count(), self.show_line_numbers),
+            24,
+        )
+    }
+
     fn focus_config(&self) -> FocusConfig {
         FocusConfig::Composite
     }
@@ -274,6 +285,17 @@ impl<M: 'static> Widget<M> for LogViewer<M> {
 
     fn constraints(&self) -> Constraints {
         content_constraints(self.height, self.border, 24)
+    }
+
+    fn measure(&self, proposal: SizeProposal, _ctx: &MeasureCtx) -> MeasuredSize {
+        measure_text_viewer(
+            self.lines.iter().map(|line| line.message.as_str()),
+            self.height,
+            self.border,
+            proposal,
+            0,
+            24,
+        )
     }
 
     fn focus_config(&self) -> FocusConfig {
@@ -426,6 +448,17 @@ impl<M: 'static> Widget<M> for MarkdownViewer<M> {
         content_constraints(self.height, self.border, 24)
     }
 
+    fn measure(&self, proposal: SizeProposal, _ctx: &MeasureCtx) -> MeasuredSize {
+        measure_text_viewer(
+            self.markdown.lines(),
+            self.height,
+            self.border,
+            proposal,
+            0,
+            24,
+        )
+    }
+
     fn focus_config(&self) -> FocusConfig {
         FocusConfig::Composite
     }
@@ -462,6 +495,10 @@ impl<M: 'static> Widget<M> for DiffViewer<M> {
 
     fn constraints(&self) -> Constraints {
         content_constraints(self.height, self.border, 24)
+    }
+
+    fn measure(&self, proposal: SizeProposal, _ctx: &MeasureCtx) -> MeasuredSize {
+        measure_text_viewer(self.diff.lines(), self.height, self.border, proposal, 0, 24)
     }
 
     fn focus_config(&self) -> FocusConfig {
@@ -684,6 +721,45 @@ fn content_constraints(height: u16, border: Option<BorderStyle>, min_width: u16)
     }
 }
 
+fn measure_text_viewer<'a>(
+    lines: impl Iterator<Item = &'a str>,
+    height: u16,
+    border: Option<BorderStyle>,
+    proposal: SizeProposal,
+    prefix_width: usize,
+    min_width: u16,
+) -> MeasuredSize {
+    let border_size = if border.is_some() { 2 } else { 0 };
+    let widest = lines
+        .map(|line| line.width().saturating_add(prefix_width))
+        .max()
+        .unwrap_or(0)
+        .max(min_width as usize);
+    let width = fit_axis(
+        (widest.min(u16::MAX as usize) as u16).saturating_add(border_size),
+        proposal.width,
+    );
+    let height = fit_axis(height, proposal.height);
+
+    MeasuredSize::new(width, height)
+}
+
+fn code_line_number_width(line_count: usize, show_line_numbers: bool) -> usize {
+    if show_line_numbers {
+        line_count.max(1).to_string().width() + 2
+    } else {
+        0
+    }
+}
+
+fn fit_axis(natural: u16, proposal: AxisLimit) -> u16 {
+    match proposal {
+        AxisLimit::Unbounded => natural,
+        AxisLimit::AtMost(max) => natural.min(max),
+        AxisLimit::Exact(value) => value,
+    }
+}
+
 fn draw_highlighted_line(
     chunk: &mut render::chunk::Chunk,
     x: u16,
@@ -829,6 +905,40 @@ fn truncate_to_width(text: &str, max_width: usize) -> String {
     }
 
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::style::Theme;
+    use crate::widget::WidgetStore;
+
+    #[test]
+    fn markdown_viewer_measure_uses_content_width_and_configured_height() {
+        let viewer = MarkdownViewer::<()>::new("short\nthis line is definitely wider than minimum")
+            .height(6);
+        let store = WidgetStore::new();
+        let theme = Theme::dark();
+        let ctx = MeasureCtx::new(&store, &theme);
+
+        let measured = viewer.measure(SizeProposal::UNBOUNDED, &ctx);
+
+        assert!(measured.width > 26);
+        assert_eq!(measured.height, 6);
+    }
+
+    #[test]
+    fn code_viewer_measure_accounts_for_line_numbers() {
+        let viewer = CodeViewer::<()>::new("a\nabc").height(4);
+        let store = WidgetStore::new();
+        let theme = Theme::dark();
+        let ctx = MeasureCtx::new(&store, &theme);
+
+        let measured = viewer.measure(SizeProposal::UNBOUNDED, &ctx);
+
+        assert_eq!(measured.width, 26);
+        assert_eq!(measured.height, 4);
+    }
 }
 
 pub fn code_viewer<M>(code: impl Into<String>) -> CodeViewer<M> {

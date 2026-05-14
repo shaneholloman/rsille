@@ -5,7 +5,7 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 use crate::event::{Event, KeyCode};
 use crate::focus::FocusConfig;
 use crate::layout::border_renderer;
-use crate::layout::{ensure_item_visible, Constraints};
+use crate::layout::{ensure_item_visible, Constraints, LayoutStyle};
 use crate::style::{BorderStyle, Style};
 use crate::widget::{EventCtx, EventPhase, RenderCtx, Widget};
 
@@ -542,20 +542,19 @@ impl<M: 'static> Widget<M> for CommandPalette<M> {
     }
 
     fn constraints(&self) -> Constraints {
-        let widest = self
-            .items
-            .iter()
-            .map(|item| item.label.width() as u16)
-            .max()
-            .unwrap_or(20);
-
         Constraints {
-            min_width: widest.max(self.placeholder.width() as u16) + 6,
+            min_width: self.preferred_width(),
             max_width: None,
             min_height: self.height,
             max_height: Some(self.height),
             flex: None,
         }
+    }
+
+    fn layout_style(&self) -> LayoutStyle {
+        let mut style = LayoutStyle::from_constraints(self.constraints());
+        style.preferred_width = Some(self.preferred_width());
+        style
     }
 
     fn focus_config(&self) -> FocusConfig {
@@ -574,4 +573,20 @@ impl<M: 'static> Widget<M> for CommandPalette<M> {
 /// Create a new command palette widget.
 pub fn command_palette<M>() -> CommandPalette<M> {
     CommandPalette::new()
+}
+
+impl<M> CommandPalette<M> {
+    fn preferred_width(&self) -> u16 {
+        let widest = self
+            .items
+            .iter()
+            .map(|item| item.label.width() as u16)
+            .chain(self.title.iter().map(|title| title.width() as u16))
+            .max()
+            .unwrap_or(20) as u16;
+        widest
+            .max(self.placeholder.width() as u16)
+            .saturating_add(self.prompt.width() as u16)
+            .saturating_add(7)
+    }
 }

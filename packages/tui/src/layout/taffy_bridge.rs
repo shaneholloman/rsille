@@ -89,14 +89,7 @@ impl TaffyBridge {
         let mut results = Vec::with_capacity(nodes.len());
         for node in nodes.iter() {
             let layout = self.tree.layout(*node)?;
-            results.push(Area::new(
-                (
-                    available.x() + layout.location.x as u16,
-                    available.y() + layout.location.y as u16,
-                )
-                    .into(),
-                (layout.size.width as u16, layout.size.height as u16).into(),
-            ));
+            results.push(layout_to_area(available, layout));
         }
 
         Ok(results)
@@ -183,14 +176,7 @@ impl TaffyBridge {
         let mut results = Vec::with_capacity(nodes.len());
         for node in nodes.iter() {
             let layout = self.tree.layout(*node)?;
-            results.push(Area::new(
-                (
-                    available.x() + layout.location.x as u16,
-                    available.y() + layout.location.y as u16,
-                )
-                    .into(),
-                (layout.size.width as u16, layout.size.height as u16).into(),
-            ));
+            results.push(layout_to_area(available, layout));
         }
 
         Ok(results)
@@ -293,14 +279,7 @@ impl TaffyBridge {
         let mut results = Vec::with_capacity(nodes.len());
         for node in nodes.iter() {
             let layout = self.tree.layout(*node)?;
-            results.push(Area::new(
-                (
-                    available.x() + layout.location.x as u16,
-                    available.y() + layout.location.y as u16,
-                )
-                    .into(),
-                (layout.size.width as u16, layout.size.height as u16).into(),
-            ));
+            results.push(layout_to_area(available, layout));
         }
 
         Ok(results)
@@ -577,5 +556,101 @@ fn f32_to_cells(value: f32) -> u16 {
         0
     } else {
         value.floor().min(u16::MAX as f32) as u16
+    }
+}
+
+fn layout_to_area(available: Area, layout: &taffy::tree::Layout) -> Area {
+    let left = floor_cells(layout.location.x).min(available.width());
+    let top = floor_cells(layout.location.y).min(available.height());
+    let right = ceil_cells(layout.location.x + layout.size.width).min(available.width());
+    let bottom = ceil_cells(layout.location.y + layout.size.height).min(available.height());
+
+    Area::new(
+        (
+            available.x().saturating_add(left),
+            available.y().saturating_add(top),
+        )
+            .into(),
+        (right.saturating_sub(left), bottom.saturating_sub(top)).into(),
+    )
+}
+
+fn floor_cells(value: f32) -> u16 {
+    if !value.is_finite() || value <= 0.0 {
+        0
+    } else {
+        value.floor().min(u16::MAX as f32) as u16
+    }
+}
+
+fn ceil_cells(value: f32) -> u16 {
+    if !value.is_finite() || value <= 0.0 {
+        0
+    } else {
+        value.ceil().min(u16::MAX as f32) as u16
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::style::Theme;
+    use crate::widget::{MeasureCtx, RenderCtx, Widget, WidgetStore};
+
+    #[test]
+    fn measured_layout_areas_are_clamped_to_available_bounds() {
+        let widgets: Vec<Box<dyn Widget<()>>> =
+            vec![Box::new(StyleWidget::new(LayoutStyle::fixed(12, 4)))];
+        let store = WidgetStore::new();
+        let theme = Theme::dark();
+        let ctx = MeasureCtx::new(&store, &theme);
+        let available = Area::new((3, 2).into(), (5, 2).into());
+        let mut bridge = TaffyBridge::new();
+
+        let areas = bridge
+            .compute_layout_measured(
+                &widgets,
+                available,
+                crate::layout::Direction::Horizontal,
+                0,
+                None,
+                None,
+                &ctx,
+            )
+            .expect("layout");
+
+        let area = areas[0];
+        assert!(area.x() >= available.x());
+        assert!(area.y() >= available.y());
+        assert!(area.x().saturating_add(area.width()) <= available.x() + available.width());
+        assert!(area.y().saturating_add(area.height()) <= available.y() + available.height());
+    }
+
+    struct StyleWidget {
+        style: LayoutStyle,
+    }
+
+    impl StyleWidget {
+        fn new(style: LayoutStyle) -> Self {
+            Self { style }
+        }
+    }
+
+    impl Widget<()> for StyleWidget {
+        fn render(&self, _chunk: &mut render::chunk::Chunk, _ctx: &RenderCtx) {}
+
+        fn constraints(&self) -> Constraints {
+            Constraints {
+                min_width: self.style.min_width,
+                max_width: self.style.max_width,
+                min_height: self.style.min_height,
+                max_height: self.style.max_height,
+                flex: None,
+            }
+        }
+
+        fn layout_style(&self) -> LayoutStyle {
+            self.style
+        }
     }
 }

@@ -424,6 +424,7 @@ fn fit_axis(natural: u16, proposal: AxisLimit) -> u16 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::layout::LayoutStyle;
     use crate::style::Theme;
     use crate::widget::{MeasureCtx, Widget, WidgetStore};
     use crate::widgets::label;
@@ -470,5 +471,64 @@ mod tests {
 
         assert_eq!(measured.width, 11);
         assert_eq!(measured.height, 1);
+    }
+
+    #[test]
+    fn horizontal_flex_layout_respects_preferred_width_before_growing_remainder() {
+        let widgets: Vec<Box<dyn Widget<()>>> = vec![
+            Box::new(StyleWidget::new(LayoutStyle::min(2, 1).preferred_width(6))),
+            Box::new(StyleWidget::new(LayoutStyle::min(0, 1).flex(1.0))),
+        ];
+        let store = WidgetStore::new();
+        let theme = Theme::dark();
+        let ctx = MeasureCtx::new(&store, &theme);
+        let mut bridge = TaffyBridge::new();
+
+        let areas = bridge
+            .compute_layout_measured(
+                &widgets,
+                Area::new((0, 0).into(), (20, 1).into()),
+                Direction::Horizontal,
+                0,
+                None,
+                None,
+                &ctx,
+            )
+            .expect("layout");
+
+        assert_eq!(areas[0].width(), 6);
+        assert_eq!(areas[1].width(), 14);
+    }
+
+    struct StyleWidget {
+        style: LayoutStyle,
+    }
+
+    impl StyleWidget {
+        fn new(style: LayoutStyle) -> Self {
+            Self { style }
+        }
+    }
+
+    impl Widget<()> for StyleWidget {
+        fn render(&self, _chunk: &mut render::chunk::Chunk, _ctx: &RenderCtx) {}
+
+        fn constraints(&self) -> Constraints {
+            Constraints {
+                min_width: self.style.min_width,
+                max_width: self.style.max_width,
+                min_height: self.style.min_height,
+                max_height: self.style.max_height,
+                flex: (self.style.flex_grow > 0.0).then_some(self.style.flex_grow),
+            }
+        }
+
+        fn layout_style(&self) -> LayoutStyle {
+            self.style
+        }
+
+        fn measure(&self, proposal: SizeProposal, _ctx: &MeasureCtx) -> MeasuredSize {
+            self.style.resolve_fallback_size(proposal)
+        }
     }
 }

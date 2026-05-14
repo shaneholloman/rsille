@@ -205,11 +205,21 @@ pub(crate) fn render_children_vertical_clipped<M>(
         return;
     }
 
+    let layout_content = Area::new(
+        content.pos(),
+        (
+            content.width(),
+            clip.y()
+                .saturating_add(clip.height())
+                .saturating_sub(content.y()),
+        )
+            .into(),
+    );
     let mut bridge = TaffyBridge::new();
     let measure_ctx = ctx.measure_ctx();
     let child_areas = match bridge.compute_layout_measured(
         children,
-        content,
+        layout_content,
         Direction::Vertical,
         gap,
         None,

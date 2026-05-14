@@ -92,6 +92,22 @@ pub struct LayoutStyle {
 }
 
 impl LayoutStyle {
+    pub fn new() -> Self {
+        Self::from_constraints(Constraints::content())
+    }
+
+    pub fn fixed(width: u16, height: u16) -> Self {
+        Self::from_constraints(Constraints::fixed(width, height))
+    }
+
+    pub fn fill() -> Self {
+        Self::from_constraints(Constraints::fill())
+    }
+
+    pub fn min(width: u16, height: u16) -> Self {
+        Self::from_constraints(Constraints::min(width, height))
+    }
+
     pub fn from_constraints(constraints: Constraints) -> Self {
         let preferred_width = constraints
             .max_width
@@ -132,6 +148,47 @@ impl LayoutStyle {
         let width = clamp_axis(size.width, self.min_width, self.max_width);
         let height = clamp_axis(size.height, self.min_height, self.max_height);
         MeasuredSize { width, height }
+    }
+
+    pub fn preferred_width(mut self, width: u16) -> Self {
+        self.preferred_width = Some(width);
+        self
+    }
+
+    pub fn preferred_height(mut self, height: u16) -> Self {
+        self.preferred_height = Some(height);
+        self
+    }
+
+    pub fn max_width(mut self, width: u16) -> Self {
+        self.max_width = Some(width);
+        self
+    }
+
+    pub fn max_height(mut self, height: u16) -> Self {
+        self.max_height = Some(height);
+        self
+    }
+
+    pub fn flex(mut self, grow: f32) -> Self {
+        self.flex_grow = grow;
+        self
+    }
+
+    pub fn overflow_x(mut self, overflow: Overflow) -> Self {
+        self.overflow_x = overflow;
+        self
+    }
+
+    pub fn overflow_y(mut self, overflow: Overflow) -> Self {
+        self.overflow_y = overflow;
+        self
+    }
+}
+
+impl Default for LayoutStyle {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

@@ -4,9 +4,9 @@ use render::area::Area;
 
 use crate::event::{Event, KeyCode, MouseButton, MouseEventKind};
 use crate::focus::FocusConfig;
-use crate::layout::Constraints;
+use crate::layout::{AxisLimit, Constraints, MeasuredSize, SizeProposal};
 use crate::style::Style;
-use crate::widget::{EventCtx, EventPhase, IntoWidget, RenderCtx, Widget, WidgetKey};
+use crate::widget::{EventCtx, EventPhase, IntoWidget, MeasureCtx, RenderCtx, Widget, WidgetKey};
 
 /// Split direction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -50,8 +50,8 @@ pub struct Split<M = ()> {
     children: Vec<Box<dyn Widget<M>>>,
     direction: SplitDirection,
     initial_size: SplitSize,
-    min_first: u16,
-    min_second: u16,
+    min_first: Option<u16>,
+    min_second: Option<u16>,
     divider_size: u16,
     divider_style: Option<Style>,
     handle_style: Option<Style>,
@@ -80,8 +80,8 @@ impl<M> Split<M> {
             children: vec![first.into_widget(), second.into_widget()],
             direction: SplitDirection::Horizontal,
             initial_size: SplitSize::Ratio(0.5),
-            min_first: 8,
-            min_second: 8,
+            min_first: None,
+            min_second: None,
             divider_size: 1,
             divider_style: None,
             handle_style: None,
@@ -128,12 +128,12 @@ impl<M> Split<M> {
     }
 
     pub fn min_first(mut self, size: u16) -> Self {
-        self.min_first = size;
+        self.min_first = Some(size);
         self
     }
 
     pub fn min_second(mut self, size: u16) -> Self {
-        self.min_second = size;
+        self.min_second = Some(size);
         self
     }
 
@@ -167,10 +167,24 @@ impl<M> Split<M> {
         self
     }
 
+    fn effective_min_first(&self) -> u16 {
+        self.min_first.unwrap_or_else(|| match self.direction {
+            SplitDirection::Horizontal => self.children[0].layout_style().min_width,
+            SplitDirection::Vertical => self.children[0].layout_style().min_height,
+        })
+    }
+
+    fn effective_min_second(&self) -> u16 {
+        self.min_second.unwrap_or_else(|| match self.direction {
+            SplitDirection::Horizontal => self.children[1].layout_style().min_width,
+            SplitDirection::Vertical => self.children[1].layout_style().min_height,
+        })
+    }
+
     fn clamp_first_size(&self, first_size: u16, total_main: u16) -> u16 {
         let available = total_main.saturating_sub(self.divider_size);
-        let min_first = self.min_first.min(available);
-        let max_first = available.saturating_sub(self.min_second.min(available));
+        let min_first = self.effective_min_first().min(available);
+        let max_first = available.saturating_sub(self.effective_min_second().min(available));
         first_size.clamp(min_first, max_first.max(min_first))
     }
 
@@ -363,14 +377,14 @@ impl<M> Widget<M> for Split<M> {
                 }
                 (SplitDirection::Horizontal, KeyCode::Home)
                 | (SplitDirection::Vertical, KeyCode::Home) => {
-                    next_size = self.min_first;
+                    next_size = self.effective_min_first();
                     handled = true;
                 }
                 (SplitDirection::Horizontal, KeyCode::End)
                 | (SplitDirection::Vertical, KeyCode::End) => {
                     next_size = total_main
                         .saturating_sub(self.divider_size)
-                        .saturating_sub(self.min_second);
+                        .saturating_sub(self.effective_min_second());
                     handled = true;
                 }
                 _ => {}
@@ -445,6 +459,65 @@ impl<M> Widget<M> for Split<M> {
         }
     }
 
+    fn measure(&self, proposal: SizeProposal, ctx: &MeasureCtx) -> MeasuredSize {
+        let first_ctx = ctx.child_ctx(WidgetKey::for_child(0, self.children[0].as_ref()));
+        let second_ctx = ctx.child_ctx(WidgetKey::for_child(1, self.children[1].as_ref()));
+
+        let measured = match self.direction {
+            SplitDirection::Horizontal => {
+                let first = self.children[0].measure(
+                    SizeProposal {
+                        width: AxisLimit::Unbounded,
+                        height: proposal.height,
+                    },
+                    &first_ctx,
+                );
+                let second = self.children[1].measure(
+                    SizeProposal {
+                        width: AxisLimit::Unbounded,
+                        height: proposal.height,
+                    },
+                    &second_ctx,
+                );
+                MeasuredSize::new(
+                    first
+                        .width
+                        .saturating_add(second.width)
+                        .saturating_add(self.divider_size),
+                    first.height.max(second.height),
+                )
+            }
+            SplitDirection::Vertical => {
+                let first = self.children[0].measure(
+                    SizeProposal {
+                        width: proposal.width,
+                        height: AxisLimit::Unbounded,
+                    },
+                    &first_ctx,
+                );
+                let second = self.children[1].measure(
+                    SizeProposal {
+                        width: proposal.width,
+                        height: AxisLimit::Unbounded,
+                    },
+                    &second_ctx,
+                );
+                MeasuredSize::new(
+                    first.width.max(second.width),
+                    first
+                        .height
+                        .saturating_add(second.height)
+                        .saturating_add(self.divider_size),
+                )
+            }
+        };
+
+        self.layout_style().clamp_size(MeasuredSize::new(
+            fit_axis(measured.width, proposal.width),
+            fit_axis(measured.height, proposal.height),
+        ))
+    }
+
     fn children(&self) -> &[Box<dyn Widget<M>>] {
         &self.children
     }
@@ -465,4 +538,63 @@ impl<M> Widget<M> for Split<M> {
 /// Create a new two-pane split container.
 pub fn split<M>(first: impl IntoWidget<M>, second: impl IntoWidget<M>) -> Split<M> {
     Split::new(first, second)
+}
+
+fn fit_axis(natural: u16, proposal: AxisLimit) -> u16 {
+    match proposal {
+        AxisLimit::Unbounded => natural,
+        AxisLimit::AtMost(max) => natural.min(max),
+        AxisLimit::Exact(value) => value,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::style::Theme;
+    use crate::widget::{MeasureCtx, Widget, WidgetStore};
+    use crate::widgets::label;
+
+    #[test]
+    fn split_default_minimum_comes_from_child_layout_style() {
+        let split = Split::new(label::<()>("wide label"), label("b")).ratio(0.0);
+        let layout = split
+            .layout(
+                Area::new((0, 0).into(), (24, 4).into()),
+                &SplitState::default(),
+            )
+            .expect("layout");
+
+        assert_eq!(
+            layout.first.width(),
+            split.children[0].layout_style().min_width
+        );
+    }
+
+    #[test]
+    fn split_explicit_minimum_overrides_child_minimum() {
+        let split = Split::new(label::<()>("wide label"), label("b"))
+            .ratio(0.0)
+            .min_first(3);
+        let layout = split
+            .layout(
+                Area::new((0, 0).into(), (24, 4).into()),
+                &SplitState::default(),
+            )
+            .expect("layout");
+
+        assert_eq!(layout.first.width(), 3);
+    }
+
+    #[test]
+    fn split_measure_uses_child_measurement() {
+        let split = Split::new(label::<()>("left"), label("right")).horizontal();
+        let store = WidgetStore::new();
+        let theme = Theme::dark();
+        let ctx = MeasureCtx::new(&store, &theme);
+
+        let measured = split.measure(SizeProposal::UNBOUNDED, &ctx);
+
+        assert_eq!(measured, MeasuredSize::new(10, 1));
+    }
 }

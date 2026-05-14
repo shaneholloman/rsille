@@ -7,7 +7,7 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 use crate::event::{Event, KeyCode, KeyEvent, KeyModifiers};
 use crate::focus::FocusConfig;
 use crate::layout::border_renderer;
-use crate::layout::{ensure_item_visible, Constraints};
+use crate::layout::{ensure_item_visible, Constraints, LayoutStyle};
 use crate::style::{BorderStyle, Style, Theme};
 use crate::widget::{EventCtx, EventPhase, RenderCtx, Widget};
 use crate::widgets::VariantWidget;
@@ -365,12 +365,18 @@ impl<M: 'static> Widget<M> for TextArea<M> {
 
     fn constraints(&self) -> Constraints {
         Constraints {
-            min_width: 20,
+            min_width: self.preferred_width(),
             max_width: None,
             min_height: self.height,
             max_height: Some(self.height),
             flex: Some(1.0),
         }
+    }
+
+    fn layout_style(&self) -> LayoutStyle {
+        let mut style = LayoutStyle::from_constraints(self.constraints());
+        style.preferred_width = Some(self.preferred_width());
+        style
     }
 
     fn focus_config(&self) -> FocusConfig {
@@ -466,4 +472,27 @@ fn truncate_to_width(text: &str, max_width: usize) -> String {
 
 pub fn textarea<M>() -> TextArea<M> {
     TextArea::new()
+}
+
+impl<M> TextArea<M> {
+    fn preferred_width(&self) -> u16 {
+        let value_width = self
+            .value
+            .split('\n')
+            .map(|line| line.width() as u16)
+            .max()
+            .unwrap_or(0);
+        let placeholder_width = self
+            .placeholder
+            .as_deref()
+            .map(|placeholder| placeholder.width() as u16)
+            .unwrap_or(0);
+        value_width.max(placeholder_width).max(20).saturating_add(
+            if self.variant == TextAreaVariant::Default {
+                2
+            } else {
+                0
+            },
+        )
+    }
 }

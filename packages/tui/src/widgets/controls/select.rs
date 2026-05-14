@@ -5,7 +5,7 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 use crate::event::{Event, KeyCode, MouseButton, MouseEventKind};
 use crate::focus::FocusConfig;
 use crate::layout::border_renderer;
-use crate::layout::{ensure_item_visible, Constraints};
+use crate::layout::{ensure_item_visible, Constraints, LayoutStyle};
 use crate::style::{BorderStyle, Style};
 use crate::widget::{EventCtx, EventPhase, RenderCtx, Widget};
 
@@ -621,20 +621,19 @@ impl<M: 'static> Widget<M> for Select<M> {
     }
 
     fn constraints(&self) -> Constraints {
-        let widest_label = self
-            .options
-            .iter()
-            .map(|option| option.label.width() as u16)
-            .max()
-            .unwrap_or(16);
-        let border_size = if self.border.is_some() { 2 } else { 0 };
         Constraints {
-            min_width: widest_label.max(self.placeholder.width() as u16) + 6 + border_size,
+            min_width: self.preferred_width(),
             max_width: None,
             min_height: self.height,
             max_height: Some(self.height),
             flex: None,
         }
+    }
+
+    fn layout_style(&self) -> LayoutStyle {
+        let mut style = LayoutStyle::from_constraints(self.constraints());
+        style.preferred_width = Some(self.preferred_width());
+        style
     }
 
     fn focus_config(&self) -> FocusConfig {
@@ -689,6 +688,21 @@ fn sync_state_aliases(state: &mut SelectState) {
         }
     } else if state.selected_option.is_none() {
         state.selected_option = state.selection.primary_selected().map(str::to_owned);
+    }
+}
+
+impl<M> Select<M> {
+    fn preferred_width(&self) -> u16 {
+        let widest_label = self
+            .options
+            .iter()
+            .map(|option| option.label.width() as u16)
+            .max()
+            .unwrap_or(16);
+        widest_label
+            .max(self.placeholder.width() as u16)
+            .saturating_add(6)
+            .saturating_add(if self.border.is_some() { 2 } else { 0 })
     }
 }
 
