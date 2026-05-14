@@ -35,7 +35,7 @@ pub use divider::{divider, Divider, DividerDirection, DividerTextPosition, Divid
 pub use file_explorer::{
     file_explorer, FileExplorer, FileExplorerItem, FileExplorerItemKind, FileExplorerState,
 };
-pub use label::{label, Label};
+pub use label::{label, Label, TextWrap};
 pub use list::{list, List, ListItem, ListState};
 pub use menu::{menu, Menu, MenuItem, MenuState};
 pub use panel::{panel, Panel};

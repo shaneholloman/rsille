@@ -52,7 +52,7 @@ pub use crate::widgets::{
     RadioOption, Select, SelectOption, SelectSearchMode, SelectState, SelectionMode,
     SelectionState, Spacer, StaggerMode, Switch, TabItem, TableAlign, Tabs, TabsState,
     TerminalVisualCapabilities, TextArea, TextAreaState, TextAreaVariant, TextInput,
-    TextInputVariant, Tree, TreeItem, TreeState, TypewriterMode, VariantWidget, Visual,
+    TextInputVariant, TextWrap, Tree, TreeItem, TreeState, TypewriterMode, VariantWidget, Visual,
     VisualAnchor, VisualConfig, VisualCtx, VisualDegradation, VisualEffect, VisualEffectCost,
     VisualPerformanceConfig, VisualProfile, WaveAxis, WipeDirection, WipeMode,
 };
