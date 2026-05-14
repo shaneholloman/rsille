@@ -295,15 +295,15 @@ impl<M> Widget<M> for Grid<M> {
                 continue;
             }
 
-            if !child_area.intersects(&padded_area) {
+            let Some(child_area) = child_area.clamp_to(&content_area) else {
                 continue;
-            }
+            };
 
             ctx.render_child_at(
                 chunk,
                 WidgetKey::for_child(index, child.as_ref()),
                 child.as_ref(),
-                *child_area,
+                child_area,
             );
         }
     }

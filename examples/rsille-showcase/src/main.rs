@@ -371,13 +371,13 @@ fn project_tree_card(_state: &State) -> impl Widget<Msg> {
     panel::<Msg>()
         .title("Repository browser")
         .border(BorderStyle::Rounded)
-        .padding(Padding::uniform(1))
+        .padding(Padding::horizontal(1))
         .gap(1)
         .style(Style::default().bg(Color::Rgb(10, 14, 22)))
         .child(
             file_explorer::<Msg>()
                 .key("repo-files")
-                .height(17)
+                .height(18)
                 .border(BorderStyle::Rounded)
                 .multi_select(true)
                 .items(project_file_tree())
@@ -391,7 +391,7 @@ fn file_preview_card(state: &State) -> impl Widget<Msg> {
     panel::<Msg>()
         .title(format!("Preview: {}", compact_path(&state.file)))
         .border(BorderStyle::Rounded)
-        .padding(Padding::uniform(1))
+        .padding(Padding::horizontal(1))
         .gap(1)
         .style(Style::default().bg(Color::Rgb(9, 13, 20)))
         .child(
@@ -410,12 +410,12 @@ fn diff_card(state: &State) -> impl Widget<Msg> {
             compact_path(&state.opened_file)
         ))
         .border(BorderStyle::Rounded)
-        .padding(Padding::uniform(1))
+        .padding(Padding::horizontal(1))
         .style(Style::default().bg(Color::Rgb(9, 13, 20)))
         .child(
             diff_viewer::<Msg>(&state.file_diff)
                 .key("file-diff")
-                .height(13)
+                .height(14)
                 .border(BorderStyle::Rounded),
         )
 }
@@ -424,7 +424,7 @@ fn workbench_activity_card(state: &State) -> impl Widget<Msg> {
     panel::<Msg>()
         .title("Activity")
         .border(BorderStyle::Rounded)
-        .padding(Padding::uniform(1))
+        .padding(Padding::horizontal(1))
         .gap(1)
         .style(Style::default().bg(Color::Rgb(12, 16, 24)))
         .child(

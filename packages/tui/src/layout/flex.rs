@@ -231,9 +231,9 @@ impl<M> Widget<M> for Flex<M> {
                 continue;
             }
 
-            if !child_area.intersects(&inner) {
+            let Some(child_area) = child_area.clamp_to(&border_area) else {
                 continue;
-            }
+            };
 
             ctx.render_child_at(
                 chunk,

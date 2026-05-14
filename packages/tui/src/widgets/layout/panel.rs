@@ -145,7 +145,7 @@ impl<M> Widget<M> for Panel<M> {
             self.padding.left,
             self.padding.right,
         );
-        render_children_vertical(chunk, ctx, &self.children, content, self.gap);
+        render_children_vertical_clipped(chunk, ctx, &self.children, content, inner, self.gap);
     }
 
     fn handle_event(&self, _event: &Event, _ctx: &mut EventCtx<M>) {}
@@ -175,6 +175,17 @@ pub(crate) fn render_children_vertical<M>(
     content: Area,
     gap: u16,
 ) {
+    render_children_vertical_clipped(chunk, ctx, children, content, content, gap);
+}
+
+pub(crate) fn render_children_vertical_clipped<M>(
+    chunk: &mut render::chunk::Chunk,
+    ctx: &RenderCtx,
+    children: &[Box<dyn Widget<M>>],
+    content: Area,
+    clip: Area,
+    gap: u16,
+) {
     if content.width() == 0 || content.height() == 0 {
         return;
     }
@@ -199,9 +210,9 @@ pub(crate) fn render_children_vertical<M>(
             continue;
         }
 
-        if !child_area.intersects(&content) {
+        let Some(child_area) = child_area.clamp_to(&clip) else {
             continue;
-        }
+        };
 
         ctx.render_child_at(
             chunk,
@@ -369,6 +380,40 @@ mod tests {
         );
     }
 
+    #[test]
+    fn panel_clips_children_to_content_area_when_space_is_tight() {
+        let panel = panel::<()>()
+            .padding(Padding::ZERO)
+            .child(crate::widgets::label("first\nsecond\nthird"));
+
+        let buffer = render_widget(&panel, 12, 4);
+        let chars = BorderStyle::Single.chars();
+
+        assert_eq!(cell_char(&buffer, 0, 3), Some(chars.bottom_left));
+        for x in 1..11 {
+            assert_eq!(cell_char(&buffer, x, 3), Some(chars.horizontal));
+        }
+        assert_eq!(cell_char(&buffer, 11, 3), Some(chars.bottom_right));
+    }
+
+    #[test]
+    fn tight_panel_can_use_bottom_padding_without_covering_border() {
+        let panel = panel::<()>()
+            .padding(Padding::uniform(1))
+            .child(crate::widgets::label("a\nb\nc"));
+
+        let buffer = render_widget(&panel, 8, 5);
+        let chars = BorderStyle::Single.chars();
+
+        assert_eq!(cell_char(&buffer, 2, 2), Some('a'));
+        assert_eq!(cell_char(&buffer, 2, 3), Some('b'));
+        assert_eq!(cell_char(&buffer, 0, 4), Some(chars.bottom_left));
+        for x in 1..7 {
+            assert_eq!(cell_char(&buffer, x, 4), Some(chars.horizontal));
+        }
+        assert_eq!(cell_char(&buffer, 7, 4), Some(chars.bottom_right));
+    }
+
     struct RecordingWidget {
         recorded: Rc<RefCell<Option<Area>>>,
         constraints: Constraints,
@@ -384,5 +429,25 @@ mod tests {
         fn constraints(&self) -> Constraints {
             self.constraints
         }
+    }
+
+    fn render_widget(widget: &impl Widget<()>, width: u16, height: u16) -> Buffer {
+        let mut buffer = Buffer::new((width, height).into());
+        let area = Area::new((0, 0).into(), (width, height).into());
+        let mut chunk = Chunk::new(&mut buffer, area).unwrap();
+        let store = WidgetStore::new();
+        let animation_store = AnimationStore::new();
+        let theme = Theme::dark();
+        let geometry = RefCell::new(HashMap::<WidgetPath, Area>::new());
+        let ctx = RenderCtx::new(&store, &animation_store, &theme, None, &geometry);
+
+        widget.render(&mut chunk, &ctx);
+        drop(chunk);
+        buffer
+    }
+
+    fn cell_char(buffer: &Buffer, x: u16, y: u16) -> Option<char> {
+        let index = (y * buffer.size().width + x) as usize;
+        buffer.content()[index].content.c
     }
 }
