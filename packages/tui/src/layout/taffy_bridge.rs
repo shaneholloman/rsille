@@ -207,6 +207,7 @@ impl TaffyBridge {
         gap_column: u16,
         align_items: Option<AlignItems>,
         justify_items: Option<JustifyItems>,
+        measure_ctx: &MeasureCtx,
     ) -> Result<Vec<Area>, crate::WidgetError> {
         if items.is_empty() {
             return Ok(vec![]);
@@ -217,10 +218,10 @@ impl TaffyBridge {
 
         // Create Taffy nodes for each widget with placement
         let mut nodes = Vec::with_capacity(items.len());
-        for (widget, placement) in items {
-            let constraints = widget.constraints();
-            let style = self.constraints_to_grid_style_with_placement(constraints, placement);
-            let node = self.tree.new_leaf(style)?;
+        for (index, (widget, placement)) in items.iter().enumerate() {
+            let style =
+                self.layout_style_to_grid_style_with_placement(widget.layout_style(), placement);
+            let node = self.tree.new_leaf_with_context(style, index)?;
             nodes.push(node);
         }
 
@@ -262,7 +263,31 @@ impl TaffyBridge {
             height: AvailableSpace::Definite(available.height() as f32),
         };
 
-        self.tree.compute_layout(container, available_size)?;
+        self.tree.compute_layout_with_measure(
+            container,
+            available_size,
+            |known_dimensions, available_space, _node, node_context, _style| {
+                let Some(index) = node_context.map(|index| *index) else {
+                    return Size::ZERO;
+                };
+                let Some((widget, _)) = items.get(index) else {
+                    return Size::ZERO;
+                };
+
+                let proposal = SizeProposal {
+                    width: taffy_axis_to_proposal(known_dimensions.width, available_space.width),
+                    height: taffy_axis_to_proposal(known_dimensions.height, available_space.height),
+                };
+                let child_ctx = measure_ctx.child_ctx(WidgetKey::for_child(index, *widget));
+                let measured = widget.measure(proposal, &child_ctx);
+                let measured = widget.layout_style().clamp_size(measured);
+
+                Size {
+                    width: measured.width as f32,
+                    height: measured.height as f32,
+                }
+            },
+        )?;
 
         // Extract computed positions
         let mut results = Vec::with_capacity(nodes.len());
@@ -290,10 +315,23 @@ impl TaffyBridge {
         }
     }
 
-    /// Convert widget constraints to grid item style
-    fn constraints_to_grid_style(&self, constraints: Constraints) -> Style {
-        let width = if let Some(max) = constraints.max_width {
-            if max == constraints.min_width {
+    fn layout_style_to_grid_style_with_placement(
+        &self,
+        layout_style: LayoutStyle,
+        placement: &super::grid_placement::GridPlacement,
+    ) -> Style {
+        let mut style = self.layout_style_to_grid_style(layout_style);
+
+        self.apply_grid_placement(&mut style, placement);
+
+        style
+    }
+
+    fn layout_style_to_grid_style(&self, layout_style: LayoutStyle) -> Style {
+        let width = if let Some(preferred) = layout_style.preferred_width {
+            Dimension::length(preferred as f32)
+        } else if let Some(max) = layout_style.max_width {
+            if max == layout_style.min_width {
                 Dimension::length(max as f32)
             } else {
                 Dimension::auto()
@@ -302,8 +340,10 @@ impl TaffyBridge {
             Dimension::auto()
         };
 
-        let height = if let Some(max) = constraints.max_height {
-            if max == constraints.min_height {
+        let height = if let Some(preferred) = layout_style.preferred_height {
+            Dimension::length(preferred as f32)
+        } else if let Some(max) = layout_style.max_height {
+            if max == layout_style.min_height {
                 Dimension::length(max as f32)
             } else {
                 Dimension::auto()
@@ -313,16 +353,16 @@ impl TaffyBridge {
         };
 
         let min_size = Size {
-            width: Dimension::length(constraints.min_width as f32),
-            height: Dimension::length(constraints.min_height as f32),
+            width: Dimension::length(layout_style.min_width as f32),
+            height: Dimension::length(layout_style.min_height as f32),
         };
 
         let max_size = Size {
-            width: constraints
+            width: layout_style
                 .max_width
                 .map(|w| Dimension::length(w as f32))
                 .unwrap_or(Dimension::auto()),
-            height: constraints
+            height: layout_style
                 .max_height
                 .map(|h| Dimension::length(h as f32))
                 .unwrap_or(Dimension::auto()),
@@ -332,19 +372,17 @@ impl TaffyBridge {
             size: Size { width, height },
             min_size,
             max_size,
+            flex_grow: layout_style.flex_grow,
+            flex_shrink: layout_style.flex_shrink,
             ..Default::default()
         }
     }
 
-    /// Convert widget constraints and grid placement to grid item style
-    fn constraints_to_grid_style_with_placement(
+    fn apply_grid_placement(
         &self,
-        constraints: Constraints,
+        style: &mut Style,
         placement: &super::grid_placement::GridPlacement,
-    ) -> Style {
-        // Start with base style from constraints
-        let mut style = self.constraints_to_grid_style(constraints);
-
+    ) {
         // Add grid placement information
         // Convert our GridLine to Taffy's grid positioning
         use super::grid_placement::GridLine;
@@ -395,8 +433,6 @@ impl TaffyBridge {
                 };
             }
         }
-
-        style
     }
 
     fn constraints_to_style(
