@@ -87,6 +87,15 @@ where
         Ok(())
     }
 
+    pub(crate) fn force_inline_viewport_follow(&mut self) -> std::io::Result<()> {
+        if !self.inline_mode || self.used_height == 0 {
+            return Ok(());
+        }
+
+        crossterm::queue!(self.out, Print("\r\n"), MoveToPreviousLine(1))?;
+        self.out.flush()
+    }
+
     fn render_fullscreen(&mut self) -> std::io::Result<()> {
         let buffer_size = self.buffer.size();
         // Fullscreen mode: use absolute positioning with differential rendering
@@ -340,6 +349,22 @@ where
     /// Get current render size
     pub fn size(&self) -> Size {
         self.buffer.size()
+    }
+
+    pub(crate) fn inline_origin(&self) -> Position {
+        self.pos
+    }
+
+    pub(crate) fn inline_width(&self) -> u16 {
+        self.buffer.size().width
+    }
+
+    pub(crate) fn inline_used_height(&self) -> u16 {
+        self.used_height
+    }
+
+    pub(crate) fn set_inline_origin_y(&mut self, y: u16) {
+        self.pos.y = y;
     }
 
     /// Get reference to the drawable thing

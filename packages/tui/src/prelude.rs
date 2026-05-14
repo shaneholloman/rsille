@@ -53,3 +53,4 @@ pub use crate::widgets::{
     VisualAnchor, VisualConfig, VisualCtx, VisualDegradation, VisualEffect, VisualEffectCost,
     VisualPerformanceConfig, VisualProfile, WaveAxis, WipeDirection, WipeMode,
 };
+pub use crate::InlineMouseMode;

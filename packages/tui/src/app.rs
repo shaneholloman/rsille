@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 use crossterm::event::Event;
 use render::area::Size;
 use render::chunk::Chunk;
-use render::{Draw, DrawErr, Update};
+use render::{Draw, DrawErr, InlineMouseMode, Update};
 
 use crate::animation::{
     AnimationCtx, AnimationStore, MotionPolicy, Presence, Timeline, TimelineFrame, TransitionEffect,
@@ -146,6 +146,7 @@ pub struct App<State, M = ()> {
     frame_handlers: Vec<FrameConfig<M>>,
     quit_behavior: QuitBehavior,
     mouse_capture: bool,
+    inline_mouse_mode: InlineMouseMode,
     motion_policy: MotionPolicy,
     visual_capabilities: TerminalVisualCapabilities,
 }
@@ -172,6 +173,7 @@ impl<State, M: Clone + std::fmt::Debug + Send + 'static> App<State, M> {
             frame_handlers: Vec::new(),
             quit_behavior: QuitBehavior::default(),
             mouse_capture: false,
+            inline_mouse_mode: InlineMouseMode::default(),
             motion_policy: MotionPolicy::default(),
             visual_capabilities: TerminalVisualCapabilities::default(),
         }
@@ -293,6 +295,22 @@ impl<State, M: Clone + std::fmt::Debug + Send + 'static> App<State, M> {
         self
     }
 
+    /// Configure mouse coordinate handling for inline mode.
+    pub fn with_inline_mouse_mode(mut self, mode: InlineMouseMode) -> Self {
+        self.inline_mouse_mode = mode;
+        self
+    }
+
+    /// Keep inline mouse interactions pinned to the live terminal viewport.
+    ///
+    /// This is intentionally opt-in: it emits a newline after each inline frame
+    /// and moves the cursor back so terminals that follow output stay aligned
+    /// with the rendered UI.
+    pub fn force_inline_mouse_follow(mut self) -> Self {
+        self.inline_mouse_mode = InlineMouseMode::ForceFollowViewport;
+        self
+    }
+
     /// Run the application in full-screen mode.
     pub fn run<F, V, W>(self, update: F, view: V) -> WidgetResult<()>
     where
@@ -344,12 +362,15 @@ impl<State, M: Clone + std::fmt::Debug + Send + 'static> App<State, M> {
     {
         let (width, height) = crossterm::terminal::size()?;
         let inline_max_height: u16 = 50;
+        let inline_available_height =
+            inline_available_height(height, self.inline_mouse_mode.force_follows_viewport());
 
         let (buffer_height, initial_used_height) = if inline_mode {
             let layout = view(&self.state);
             let required = layout.constraints().min_height;
-            let used = required.min(inline_max_height).min(height);
-            (inline_max_height.min(height), used)
+            let buffer_height = inline_max_height.min(inline_available_height);
+            let used = required.min(buffer_height);
+            (buffer_height, used)
         } else {
             (height, height)
         };
@@ -364,6 +385,7 @@ impl<State, M: Clone + std::fmt::Debug + Send + 'static> App<State, M> {
             frame_handlers,
             quit_behavior,
             mouse_capture,
+            inline_mouse_mode,
             motion_policy,
             visual_capabilities,
         } = self;
@@ -435,7 +457,8 @@ impl<State, M: Clone + std::fmt::Debug + Send + 'static> App<State, M> {
         if inline_mode {
             builder
                 .inline_mode(true)
-                .inline_max_height(buffer_height)
+                .inline_max_height(inline_max_height)
+                .inline_mouse_mode(inline_mouse_mode)
                 .frame_limit(60)
                 .size((width, buffer_height));
         } else {
@@ -546,6 +569,14 @@ fn scale_area_for_exit(area: render::area::Area, progress: f64) -> render::area:
     let y = area.y() + area.height().saturating_sub(height) / 2;
 
     render::area::Area::new((x, y).into(), (width, height).into())
+}
+
+fn inline_available_height(terminal_height: u16, force_follow_viewport: bool) -> u16 {
+    if force_follow_viewport {
+        terminal_height.saturating_sub(1).max(1)
+    } else {
+        terminal_height
+    }
 }
 
 fn mouse_position(event: &Event) -> Option<(u16, u16)> {

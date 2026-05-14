@@ -16,3 +16,4 @@ pub mod widgets;
 pub mod prelude;
 
 pub use error::{WidgetError, WidgetResult};
+pub use render::InlineMouseMode;

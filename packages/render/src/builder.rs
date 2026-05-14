@@ -7,6 +7,25 @@ use crate::{
     Draw, DrawUpdate, Render,
 };
 
+/// Mouse handling policy for inline rendering.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub enum InlineMouseMode {
+    /// Translate terminal mouse coordinates into the inline UI's local space.
+    #[default]
+    Local,
+    /// Aggressively keep the terminal viewport at the live output position.
+    ///
+    /// This emits a newline after each inline frame and moves the cursor back to
+    /// the rendered UI, relying on common terminal scroll-on-output behavior.
+    ForceFollowViewport,
+}
+
+impl InlineMouseMode {
+    pub fn force_follows_viewport(self) -> bool {
+        matches!(self, Self::ForceFollowViewport)
+    }
+}
+
 #[derive(Debug, Clone, Copy, Hash)]
 pub struct Builder {
     pub(super) enable_raw_mode: bool,
@@ -22,6 +41,7 @@ pub struct Builder {
     pub(super) append_newline: bool,
     pub(super) inline_mode: bool,
     pub(super) inline_max_height: u16,
+    pub(super) inline_mouse_mode: InlineMouseMode,
 }
 
 impl Builder {
@@ -40,6 +60,7 @@ impl Builder {
             append_newline: false,
             inline_mode: false,
             inline_max_height: 50,
+            inline_mouse_mode: InlineMouseMode::default(),
         }
     }
 
@@ -145,6 +166,18 @@ impl Builder {
     /// Actual height will be min(content_height, max_height, terminal_height)
     pub fn inline_max_height(&mut self, max_height: u16) -> &mut Self {
         self.inline_max_height = max_height;
+        self
+    }
+
+    /// Configure mouse handling behavior in inline mode.
+    pub fn inline_mouse_mode(&mut self, mode: InlineMouseMode) -> &mut Self {
+        self.inline_mouse_mode = mode;
+        self
+    }
+
+    /// Enable aggressive viewport following for inline mouse interactions.
+    pub fn force_inline_mouse_follow(&mut self) -> &mut Self {
+        self.inline_mouse_mode = InlineMouseMode::ForceFollowViewport;
         self
     }
 
