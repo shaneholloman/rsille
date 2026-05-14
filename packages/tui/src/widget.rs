@@ -13,7 +13,7 @@ use crate::animation::{
 };
 use crate::event::Event;
 use crate::focus::FocusConfig;
-use crate::layout::Constraints;
+use crate::layout::{Constraints, LayoutStyle, MeasuredSize, SizeProposal};
 use crate::style::Style;
 use crate::style::Theme;
 use crate::widgets::visual::TerminalVisualCapabilities;
@@ -251,6 +251,101 @@ impl fmt::Display for WidgetId {
 // Widget trait
 // ---------------------------------------------------------------------------
 
+/// Read-only context passed during widget measurement.
+///
+/// Measurement is intentionally side-effect free: widgets may inspect theme,
+/// persistent state, identity, and frame metadata, but cannot emit messages or
+/// mutate application state.
+pub struct MeasureCtx<'a> {
+    store: &'a WidgetStore,
+    theme: &'a Theme,
+    current_path: WidgetPath,
+    current_id: WidgetId,
+    stable_scope_id: WidgetId,
+    now: std::time::Instant,
+    frame: u64,
+    visual_capabilities: TerminalVisualCapabilities,
+}
+
+impl<'a> MeasureCtx<'a> {
+    pub fn new(store: &'a WidgetStore, theme: &'a Theme) -> Self {
+        Self {
+            store,
+            theme,
+            current_path: WidgetPath::root(),
+            current_id: WidgetId::root(),
+            stable_scope_id: WidgetId::root(),
+            now: std::time::Instant::now(),
+            frame: 0,
+            visual_capabilities: TerminalVisualCapabilities::default(),
+        }
+    }
+
+    pub(crate) fn with_runtime(
+        store: &'a WidgetStore,
+        theme: &'a Theme,
+        now: std::time::Instant,
+        frame: u64,
+        visual_capabilities: TerminalVisualCapabilities,
+    ) -> Self {
+        Self {
+            store,
+            theme,
+            current_path: WidgetPath::root(),
+            current_id: WidgetId::root(),
+            stable_scope_id: WidgetId::root(),
+            now,
+            frame,
+            visual_capabilities,
+        }
+    }
+
+    pub fn child_ctx(&self, key: impl Into<WidgetKey>) -> Self {
+        let key = key.into();
+        let (current_id, stable_scope_id) =
+            WidgetId::for_child(&self.current_id, &self.stable_scope_id, &key);
+
+        Self {
+            store: self.store,
+            theme: self.theme,
+            current_path: self.current_path.child(key),
+            current_id,
+            stable_scope_id,
+            now: self.now,
+            frame: self.frame,
+            visual_capabilities: self.visual_capabilities,
+        }
+    }
+
+    pub fn theme(&self) -> &Theme {
+        self.theme
+    }
+
+    pub fn now(&self) -> std::time::Instant {
+        self.now
+    }
+
+    pub fn frame(&self) -> u64 {
+        self.frame
+    }
+
+    pub fn visual_capabilities(&self) -> TerminalVisualCapabilities {
+        self.visual_capabilities
+    }
+
+    pub fn path(&self) -> &WidgetPath {
+        &self.current_path
+    }
+
+    pub fn id(&self) -> &WidgetId {
+        &self.current_id
+    }
+
+    pub fn state<T: Default + 'static>(&self) -> Option<&T> {
+        self.store.get::<T>(&self.current_id)
+    }
+}
+
 /// Core widget trait that all TUI components implement.
 ///
 /// Widgets are **immutable descriptions** of UI. All mutable state lives in
@@ -300,6 +395,16 @@ pub trait Widget<M> {
 
     /// Return size constraints for layout computation.
     fn constraints(&self) -> Constraints;
+
+    /// Return rich layout intent for measurement-aware containers.
+    fn layout_style(&self) -> LayoutStyle {
+        LayoutStyle::from_constraints(self.constraints())
+    }
+
+    /// Measure the widget's preferred size for a proposed parent allocation.
+    fn measure(&self, proposal: SizeProposal, _ctx: &MeasureCtx) -> MeasuredSize {
+        self.layout_style().resolve_fallback_size(proposal)
+    }
 
     /// How this widget participates in keyboard focus.
     fn focus_config(&self) -> FocusConfig {
@@ -354,6 +459,14 @@ impl<M> Widget<M> for Box<dyn Widget<M>> {
 
     fn constraints(&self) -> Constraints {
         (**self).constraints()
+    }
+
+    fn layout_style(&self) -> LayoutStyle {
+        (**self).layout_style()
+    }
+
+    fn measure(&self, proposal: SizeProposal, ctx: &MeasureCtx) -> MeasuredSize {
+        (**self).measure(proposal, ctx)
     }
 
     fn focus_config(&self) -> FocusConfig {
@@ -555,6 +668,20 @@ impl<'a> RenderCtx<'a> {
     /// Monotonic render frame number supplied by the runtime.
     pub fn frame(&self) -> u64 {
         self.frame
+    }
+
+    /// Create a read-only measurement context at the current widget path.
+    pub fn measure_ctx(&self) -> MeasureCtx<'a> {
+        MeasureCtx {
+            store: self.store,
+            theme: self.theme,
+            current_path: self.current_path.clone(),
+            current_id: self.current_id.clone(),
+            stable_scope_id: self.stable_scope_id.clone(),
+            now: self.now,
+            frame: self.frame,
+            visual_capabilities: self.visual_capabilities,
+        }
     }
 
     /// The global motion policy active for this render pass.

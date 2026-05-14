@@ -6,9 +6,9 @@ use super::border_renderer::{render_background, render_border};
 use super::taffy_bridge::TaffyBridge;
 use crate::event::Event;
 use crate::focus::{FocusConfig, FocusScope};
-use crate::layout::Constraints;
+use crate::layout::{AxisLimit, Constraints, MeasuredSize, SizeProposal};
 use crate::style::{BorderStyle, Padding, Style};
-use crate::widget::{EventCtx, IntoWidget, RenderCtx, Widget, WidgetKey};
+use crate::widget::{EventCtx, IntoWidget, MeasureCtx, RenderCtx, Widget, WidgetKey};
 use taffy::style::{AlignItems, JustifyContent};
 
 /// Layout direction
@@ -214,13 +214,15 @@ impl<M> Widget<M> for Flex<M> {
         }
 
         let mut bridge = TaffyBridge::new();
-        let child_areas = match bridge.compute_layout(
+        let measure_ctx = ctx.measure_ctx();
+        let child_areas = match bridge.compute_layout_measured(
             &self.children,
             inner,
             self.direction,
             self.gap,
             self.align_items,
             self.justify_content,
+            &measure_ctx,
         ) {
             Ok(areas) => areas,
             Err(_) => return,
@@ -316,6 +318,61 @@ impl<M> Widget<M> for Flex<M> {
         }
     }
 
+    fn measure(&self, proposal: SizeProposal, ctx: &MeasureCtx) -> MeasuredSize {
+        let border_size = if self.border.is_some() { 2 } else { 0 };
+        let horizontal_chrome = self.padding.horizontal_total().saturating_add(border_size);
+        let vertical_chrome = self.padding.vertical_total().saturating_add(border_size);
+        let inner_width = subtract_limit(proposal.width, horizontal_chrome);
+        let inner_height = subtract_limit(proposal.height, vertical_chrome);
+        let gap_total = self
+            .gap
+            .saturating_mul(self.children.len().saturating_sub(1) as u16);
+
+        let measured = match self.direction {
+            Direction::Vertical => {
+                let mut width: u16 = 0;
+                let mut height: u16 = gap_total;
+                for (index, child) in self.children.iter().enumerate() {
+                    let child_ctx = ctx.child_ctx(WidgetKey::for_child(index, child.as_ref()));
+                    let child_size = child.measure(
+                        SizeProposal {
+                            width: inner_width,
+                            height: AxisLimit::Unbounded,
+                        },
+                        &child_ctx,
+                    );
+                    width = width.max(child_size.width);
+                    height = height.saturating_add(child_size.height);
+                }
+                MeasuredSize::new(width, height)
+            }
+            Direction::Horizontal => {
+                let mut width: u16 = gap_total;
+                let mut height: u16 = 0;
+                for (index, child) in self.children.iter().enumerate() {
+                    let child_ctx = ctx.child_ctx(WidgetKey::for_child(index, child.as_ref()));
+                    let child_size = child.measure(
+                        SizeProposal {
+                            width: AxisLimit::Unbounded,
+                            height: inner_height,
+                        },
+                        &child_ctx,
+                    );
+                    width = width.saturating_add(child_size.width);
+                    height = height.max(child_size.height);
+                }
+                MeasuredSize::new(width, height)
+            }
+        };
+
+        let natural_width = measured.width.saturating_add(horizontal_chrome);
+        let natural_height = measured.height.saturating_add(vertical_chrome);
+        self.layout_style().clamp_size(MeasuredSize::new(
+            fit_axis(natural_width, proposal.width),
+            fit_axis(natural_height, proposal.height),
+        ))
+    }
+
     fn children(&self) -> &[Box<dyn Widget<M>>] {
         &self.children
     }
@@ -346,4 +403,72 @@ pub fn col<M>() -> Flex<M> {
 /// Create a new empty horizontal flex layout.
 pub fn row<M>() -> Flex<M> {
     Flex::horizontal(Vec::new())
+}
+
+fn subtract_limit(limit: AxisLimit, amount: u16) -> AxisLimit {
+    match limit {
+        AxisLimit::Unbounded => AxisLimit::Unbounded,
+        AxisLimit::AtMost(value) => AxisLimit::AtMost(value.saturating_sub(amount)),
+        AxisLimit::Exact(value) => AxisLimit::Exact(value.saturating_sub(amount)),
+    }
+}
+
+fn fit_axis(natural: u16, proposal: AxisLimit) -> u16 {
+    match proposal {
+        AxisLimit::Unbounded => natural,
+        AxisLimit::AtMost(max) => natural.min(max),
+        AxisLimit::Exact(value) => value,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::style::Theme;
+    use crate::widget::{MeasureCtx, Widget, WidgetStore};
+    use crate::widgets::label;
+
+    #[test]
+    fn vertical_flex_measures_children_with_fixed_width_and_sums_height() {
+        let flex = col::<()>()
+            .gap(1)
+            .child(label("head"))
+            .child(label("body\ntail"));
+        let store = WidgetStore::new();
+        let theme = Theme::dark();
+        let ctx = MeasureCtx::new(&store, &theme);
+
+        let measured = flex.measure(
+            SizeProposal {
+                width: AxisLimit::Exact(12),
+                height: AxisLimit::AtMost(20),
+            },
+            &ctx,
+        );
+
+        assert_eq!(measured.width, 12);
+        assert_eq!(measured.height, 4);
+    }
+
+    #[test]
+    fn horizontal_flex_measures_children_and_keeps_natural_height() {
+        let flex = row::<()>()
+            .gap(2)
+            .child(label("left"))
+            .child(label("right"));
+        let store = WidgetStore::new();
+        let theme = Theme::dark();
+        let ctx = MeasureCtx::new(&store, &theme);
+
+        let measured = flex.measure(
+            SizeProposal {
+                width: AxisLimit::AtMost(20),
+                height: AxisLimit::Exact(3),
+            },
+            &ctx,
+        );
+
+        assert_eq!(measured.width, 11);
+        assert_eq!(measured.height, 1);
+    }
 }

@@ -4,8 +4,8 @@ use render::area::Area;
 
 use crate::event::Event;
 use crate::focus::{FocusConfig, FocusScope};
-use crate::layout::Constraints;
-use crate::widget::{EventCtx, IntoWidget, RenderCtx, Widget, WidgetKey};
+use crate::layout::{AxisLimit, Constraints, MeasuredSize, SizeProposal};
+use crate::widget::{EventCtx, IntoWidget, MeasureCtx, RenderCtx, Widget, WidgetKey};
 
 /// Cardinal anchor positions used for floating layers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -304,6 +304,18 @@ impl<M> Widget<M> for Stack<M> {
         }
     }
 
+    fn measure(&self, proposal: SizeProposal, ctx: &MeasureCtx) -> MeasuredSize {
+        let mut measured = MeasuredSize::ZERO;
+        for (index, child) in self.children.iter().enumerate() {
+            let child_ctx = ctx.child_ctx(WidgetKey::for_child(index, child.as_ref()));
+            let child_size = child.measure(proposal, &child_ctx);
+            measured.width = measured.width.max(child_size.width);
+            measured.height = measured.height.max(child_size.height);
+        }
+
+        self.layout_style().clamp_size(measured)
+    }
+
     fn children(&self) -> &[Box<dyn Widget<M>>] {
         &self.children
     }
@@ -430,9 +442,8 @@ impl<M> Overlay<M> {
         )
     }
 
-    fn placement_area(&self, container: Area, index: usize) -> Area {
+    fn placement_area(&self, container: Area, index: usize, ctx: &MeasureCtx) -> Area {
         let child = &self.children[index];
-        let constraints = child.constraints();
         let placement = self.placements[index];
 
         match placement {
@@ -445,20 +456,21 @@ impl<M> Overlay<M> {
                 width,
                 height,
             } => {
-                let width = width
-                    .unwrap_or(constraints.min_width)
-                    .min(container.width());
-                let height = height
-                    .unwrap_or(constraints.min_height)
-                    .min(container.height());
-                Self::anchored_area(
+                let measured =
+                    measure_overlay_child(index, child.as_ref(), width, height, container, ctx);
+                let width = width.unwrap_or(measured.width).min(container.width());
+                let height = height.unwrap_or(measured.height).min(container.height());
+                clamp_overlay_area(
+                    Self::anchored_area(
+                        container,
+                        anchor,
+                        popup_anchor,
+                        width,
+                        height,
+                        offset_x,
+                        offset_y,
+                    ),
                     container,
-                    anchor,
-                    popup_anchor,
-                    width,
-                    height,
-                    offset_x,
-                    offset_y,
                 )
             }
             OverlayPlacement::Anchored {
@@ -470,20 +482,21 @@ impl<M> Overlay<M> {
                 width,
                 height,
             } => {
-                let width = width
-                    .unwrap_or(constraints.min_width)
-                    .min(container.width());
-                let height = height
-                    .unwrap_or(constraints.min_height)
-                    .min(container.height());
-                Self::anchored_area(
-                    rect.as_area(container),
-                    anchor,
-                    popup_anchor,
-                    width,
-                    height,
-                    offset_x,
-                    offset_y,
+                let measured =
+                    measure_overlay_child(index, child.as_ref(), width, height, container, ctx);
+                let width = width.unwrap_or(measured.width).min(container.width());
+                let height = height.unwrap_or(measured.height).min(container.height());
+                clamp_overlay_area(
+                    Self::anchored_area(
+                        rect.as_area(container),
+                        anchor,
+                        popup_anchor,
+                        width,
+                        height,
+                        offset_x,
+                        offset_y,
+                    ),
+                    container,
                 )
             }
         }
@@ -508,9 +521,10 @@ impl<M> Widget<M> for Overlay<M> {
 
         let mut layer_indices: Vec<usize> = (1..self.children.len()).collect();
         layer_indices.sort_by_key(|index| self.z_indices[*index]);
+        let measure_ctx = ctx.measure_ctx();
 
         for index in layer_indices {
-            let layer_area = self.placement_area(area, index);
+            let layer_area = self.placement_area(area, index, &measure_ctx);
             if layer_area.width() == 0 || layer_area.height() == 0 {
                 continue;
             }
@@ -532,6 +546,16 @@ impl<M> Widget<M> for Overlay<M> {
             .first()
             .map(|child| child.constraints())
             .unwrap_or_else(Constraints::content)
+    }
+
+    fn measure(&self, proposal: SizeProposal, ctx: &MeasureCtx) -> MeasuredSize {
+        self.children
+            .first()
+            .map(|child| {
+                let child_ctx = ctx.child_ctx(WidgetKey::for_child(0, child.as_ref()));
+                child.measure(proposal, &child_ctx)
+            })
+            .unwrap_or(MeasuredSize::ZERO)
     }
 
     fn children(&self) -> &[Box<dyn Widget<M>>] {
@@ -558,4 +582,112 @@ pub fn stack<M>() -> Stack<M> {
 /// Create an overlay container with a base widget.
 pub fn overlay<M>(base: impl IntoWidget<M>) -> Overlay<M> {
     Overlay::new(base)
+}
+
+fn measure_overlay_child<M>(
+    index: usize,
+    child: &dyn Widget<M>,
+    width: Option<u16>,
+    height: Option<u16>,
+    container: Area,
+    ctx: &MeasureCtx,
+) -> MeasuredSize {
+    let proposal = SizeProposal {
+        width: width
+            .map(AxisLimit::Exact)
+            .unwrap_or(AxisLimit::AtMost(container.width())),
+        height: height
+            .map(AxisLimit::Exact)
+            .unwrap_or(AxisLimit::AtMost(container.height())),
+    };
+    let child_ctx = ctx.child_ctx(WidgetKey::for_child(index, child));
+    child
+        .layout_style()
+        .clamp_size(child.measure(proposal, &child_ctx))
+}
+
+fn clamp_overlay_area(area: Area, container: Area) -> Area {
+    let max_x = container
+        .x()
+        .saturating_add(container.width().saturating_sub(area.width()));
+    let max_y = container
+        .y()
+        .saturating_add(container.height().saturating_sub(area.height()));
+    let x = area.x().clamp(container.x(), max_x);
+    let y = area.y().clamp(container.y(), max_y);
+    Area::new((x, y).into(), (area.width(), area.height()).into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::animation::AnimationStore;
+    use crate::style::Theme;
+    use crate::widget::{RenderCtx, WidgetPath, WidgetStore};
+    use render::buffer::Buffer;
+    use render::chunk::Chunk;
+    use std::cell::RefCell;
+    use std::collections::HashMap;
+
+    struct MeasuredWidget {
+        size: MeasuredSize,
+    }
+
+    impl Widget<()> for MeasuredWidget {
+        fn render(&self, _chunk: &mut render::chunk::Chunk, _ctx: &RenderCtx) {}
+
+        fn constraints(&self) -> Constraints {
+            Constraints::min(1, 1)
+        }
+
+        fn measure(&self, _proposal: SizeProposal, _ctx: &MeasureCtx) -> MeasuredSize {
+            self.size
+        }
+    }
+
+    #[test]
+    fn floating_overlay_uses_measured_size_when_size_is_implicit() {
+        let overlay =
+            overlay(crate::widgets::label::<()>("base")).layer(OverlayLayer::new(MeasuredWidget {
+                size: MeasuredSize::new(8, 3),
+            }));
+        let geometry = render_overlay(&overlay, 20, 10);
+        let layer_area = geometry
+            .get(&WidgetPath::root().child(1usize))
+            .copied()
+            .expect("overlay layer geometry");
+
+        assert_eq!(layer_area.width(), 8);
+        assert_eq!(layer_area.height(), 3);
+    }
+
+    #[test]
+    fn floating_overlay_clamps_measured_size_to_container() {
+        let overlay =
+            overlay(crate::widgets::label::<()>("base")).layer(OverlayLayer::new(MeasuredWidget {
+                size: MeasuredSize::new(50, 20),
+            }));
+        let geometry = render_overlay(&overlay, 10, 5);
+        let layer_area = geometry
+            .get(&WidgetPath::root().child(1usize))
+            .copied()
+            .expect("overlay layer geometry");
+
+        assert_eq!(layer_area, Area::new((0, 0).into(), (10, 5).into()));
+    }
+
+    fn render_overlay(widget: &Overlay<()>, width: u16, height: u16) -> HashMap<WidgetPath, Area> {
+        let mut buffer = Buffer::new((width, height).into());
+        let area = Area::new((0, 0).into(), (width, height).into());
+        let mut chunk = Chunk::new(&mut buffer, area).unwrap();
+        let store = WidgetStore::new();
+        let animation_store = AnimationStore::new();
+        let theme = Theme::dark();
+        let geometry = RefCell::new(HashMap::<WidgetPath, Area>::new());
+        let ctx = RenderCtx::new(&store, &animation_store, &theme, None, &geometry);
+
+        widget.render(&mut chunk, &ctx);
+        drop(chunk);
+        geometry.into_inner()
+    }
 }

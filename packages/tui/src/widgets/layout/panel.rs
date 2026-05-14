@@ -6,9 +6,9 @@ use unicode_width::UnicodeWidthChar;
 use crate::event::Event;
 use crate::layout::border_renderer;
 use crate::layout::taffy_bridge::TaffyBridge;
-use crate::layout::{Constraints, Direction};
+use crate::layout::{AxisLimit, Constraints, Direction, MeasuredSize, SizeProposal};
 use crate::style::{BorderStyle, Padding, Style};
-use crate::widget::{EventCtx, IntoWidget, RenderCtx, Widget, WidgetKey};
+use crate::widget::{EventCtx, IntoWidget, MeasureCtx, RenderCtx, Widget, WidgetKey};
 
 /// Bordered container for grouping related content.
 pub struct Panel<M = ()> {
@@ -159,6 +159,21 @@ impl<M> Widget<M> for Panel<M> {
         )
     }
 
+    fn measure(&self, proposal: SizeProposal, ctx: &MeasureCtx) -> MeasuredSize {
+        let border_size = if self.border.is_some() { 2 } else { 0 };
+        let horizontal_chrome = self.padding.horizontal_total().saturating_add(border_size);
+        let vertical_chrome = self.padding.vertical_total().saturating_add(border_size);
+        let inner_width = subtract_limit(proposal.width, horizontal_chrome);
+        let measured = measure_vertical_children(&self.children, inner_width, self.gap, ctx);
+        let natural_width = measured.width.saturating_add(horizontal_chrome);
+        let natural_height = measured.height.saturating_add(vertical_chrome);
+
+        self.layout_style().clamp_size(MeasuredSize::new(
+            fit_axis(natural_width, proposal.width),
+            fit_axis(natural_height, proposal.height),
+        ))
+    }
+
     fn children(&self) -> &[Box<dyn Widget<M>>] {
         &self.children
     }
@@ -191,14 +206,22 @@ pub(crate) fn render_children_vertical_clipped<M>(
     }
 
     let mut bridge = TaffyBridge::new();
-    let child_areas =
-        match bridge.compute_layout(children, content, Direction::Vertical, gap, None, None) {
-            Ok(areas) => areas,
-            Err(_) => {
-                render_children_vertical_min_size(chunk, ctx, children, content, gap);
-                return;
-            }
-        };
+    let measure_ctx = ctx.measure_ctx();
+    let child_areas = match bridge.compute_layout_measured(
+        children,
+        content,
+        Direction::Vertical,
+        gap,
+        None,
+        None,
+        &measure_ctx,
+    ) {
+        Ok(areas) => areas,
+        Err(_) => {
+            render_children_vertical_min_size(chunk, ctx, children, content, gap);
+            return;
+        }
+    };
 
     for (index, (child, child_area)) in children.iter().zip(child_areas).enumerate() {
         let child_area = Area::new(
@@ -252,6 +275,31 @@ fn render_children_vertical_min_size<M>(
     }
 }
 
+fn measure_vertical_children<M>(
+    children: &[Box<dyn Widget<M>>],
+    width: AxisLimit,
+    gap: u16,
+    ctx: &MeasureCtx,
+) -> MeasuredSize {
+    let mut measured = MeasuredSize::ZERO;
+    measured.height = gap.saturating_mul(children.len().saturating_sub(1) as u16);
+
+    for (index, child) in children.iter().enumerate() {
+        let child_ctx = ctx.child_ctx(WidgetKey::for_child(index, child.as_ref()));
+        let child_size = child.measure(
+            SizeProposal {
+                width,
+                height: AxisLimit::Unbounded,
+            },
+            &child_ctx,
+        );
+        measured.width = measured.width.max(child_size.width);
+        measured.height = measured.height.saturating_add(child_size.height);
+    }
+
+    measured
+}
+
 pub(crate) fn container_constraints<M>(
     children: &[Box<dyn Widget<M>>],
     padding: Padding,
@@ -280,6 +328,22 @@ pub(crate) fn container_constraints<M>(
             .saturating_add(border_size),
         max_height: None,
         flex: Some(1.0),
+    }
+}
+
+fn subtract_limit(limit: AxisLimit, amount: u16) -> AxisLimit {
+    match limit {
+        AxisLimit::Unbounded => AxisLimit::Unbounded,
+        AxisLimit::AtMost(value) => AxisLimit::AtMost(value.saturating_sub(amount)),
+        AxisLimit::Exact(value) => AxisLimit::Exact(value.saturating_sub(amount)),
+    }
+}
+
+fn fit_axis(natural: u16, proposal: AxisLimit) -> u16 {
+    match proposal {
+        AxisLimit::Unbounded => natural,
+        AxisLimit::AtMost(max) => natural.min(max),
+        AxisLimit::Exact(value) => value,
     }
 }
 

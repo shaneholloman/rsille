@@ -3,9 +3,9 @@
 use std::borrow::Cow;
 
 use crate::event::Event;
-use crate::layout::{Constraints, HorizontalAlign, VerticalAlign};
+use crate::layout::{Constraints, HorizontalAlign, MeasuredSize, SizeProposal, VerticalAlign};
 use crate::style::{Color, Style};
-use crate::widget::{EventCtx, RenderCtx, Widget};
+use crate::widget::{EventCtx, MeasureCtx, RenderCtx, Widget};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 /// Label widget for displaying text.
@@ -170,6 +170,12 @@ impl<M> Widget<M> for Label<M> {
         self.effective_constraints()
     }
 
+    fn measure(&self, _proposal: SizeProposal, _ctx: &MeasureCtx) -> MeasuredSize {
+        let (width, height) = label_size(&self.content, self.tab_width);
+        self.layout_style()
+            .clamp_size(MeasuredSize::new(width, height))
+    }
+
     fn key(&self) -> Option<&str> {
         self.widget_key.as_deref()
     }
@@ -248,6 +254,18 @@ mod tests {
         assert_eq!(constraints.max_width, Some(5));
         assert_eq!(constraints.min_height, 3);
         assert_eq!(constraints.max_height, Some(3));
+    }
+
+    #[test]
+    fn label_measure_reports_intrinsic_size_for_unbounded_proposal() {
+        let label = label::<()>("alpha\nbeta");
+        let store = WidgetStore::new();
+        let theme = Theme::dark();
+        let ctx = MeasureCtx::new(&store, &theme);
+
+        let measured = label.measure(SizeProposal::UNBOUNDED, &ctx);
+
+        assert_eq!(measured, MeasuredSize::new(5, 2));
     }
 
     #[test]

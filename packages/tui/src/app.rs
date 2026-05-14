@@ -18,11 +18,12 @@ use crate::effect::{
 };
 use crate::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEventKind};
 use crate::focus::FocusManager;
+use crate::layout::{AxisLimit, SizeProposal};
 use crate::shell::{CommandRouter, Hotkey, HotkeyRegistry};
 use crate::style::Theme;
 use crate::widget::{
-    EventCtx, EventPhase, FocusRequest, HitRegion, RenderCtx, Widget, WidgetId, WidgetKey,
-    WidgetPath, WidgetStore,
+    EventCtx, EventPhase, FocusRequest, HitRegion, MeasureCtx, RenderCtx, Widget, WidgetId,
+    WidgetKey, WidgetPath, WidgetStore,
 };
 use crate::widgets::text_input::TextInputState;
 use crate::widgets::textarea::TextAreaState;
@@ -376,8 +377,29 @@ impl<State, M: Clone + std::fmt::Debug + Send + 'static> App<State, M> {
 
         let (buffer_height, initial_used_height) = if inline_mode {
             let layout = view(&self.state);
-            let required = layout.constraints().min_height;
             let buffer_height = inline_max_height.min(inline_available_height);
+            let measure_store = WidgetStore::new();
+            let measure_theme = self
+                .theme_resolver
+                .as_ref()
+                .map(|resolver| resolver(&self.state))
+                .unwrap_or_else(|| self.theme.clone());
+            let measure_ctx = MeasureCtx::with_runtime(
+                &measure_store,
+                &measure_theme,
+                Instant::now(),
+                0,
+                self.visual_capabilities,
+            );
+            let required = layout
+                .measure(
+                    SizeProposal {
+                        width: AxisLimit::Exact(width),
+                        height: AxisLimit::AtMost(buffer_height),
+                    },
+                    &measure_ctx,
+                )
+                .height;
             let used = required.min(buffer_height);
             (buffer_height, used)
         } else {
@@ -1587,7 +1609,22 @@ where
             return None;
         }
         if let Some(ref tree) = self.cached_tree {
-            let required = tree.constraints().min_height;
+            let measure_ctx = MeasureCtx::with_runtime(
+                &self.store,
+                &self.theme,
+                Instant::now(),
+                self.render_frame,
+                self.visual_capabilities,
+            );
+            let required = tree
+                .measure(
+                    SizeProposal {
+                        width: AxisLimit::Exact(current_size.width),
+                        height: AxisLimit::AtMost(self.inline_max_height),
+                    },
+                    &measure_ctx,
+                )
+                .height;
             let height = required.min(self.inline_max_height);
             if height != current_size.height {
                 return Some(Size {

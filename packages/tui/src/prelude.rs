@@ -19,10 +19,11 @@ pub use crate::focus::{FocusConfig, FocusScope, ScopeEntry};
 pub use crate::layout::{
     clamp_scroll_offset, col, ensure_item_visible, grid, max_scroll_offset, overlay, row,
     scroll_lines, scroll_offset_for_item, scroll_view, scrollbar, split, stack, AlignItems,
-    AnchorRect, Constraints, Direction, Flex, Grid, GridLine, GridPlacement, GridTrack,
-    HorizontalAlign, JustifyContent, Overlay, OverlayAnchor, OverlayLayer, OverlayPlacement,
-    ScrollAxis, ScrollState, ScrollView, Scrollbar, ScrollbarOrientation, ScrollbarVisibility,
-    Split, SplitDirection, SplitSize, SplitState, Stack, VerticalAlign,
+    AnchorRect, AxisLimit, Constraints, Direction, Flex, Grid, GridLine, GridPlacement, GridTrack,
+    HorizontalAlign, JustifyContent, LayoutStyle, MeasuredSize, Overflow, Overlay, OverlayAnchor,
+    OverlayLayer, OverlayPlacement, ScrollAxis, ScrollState, ScrollView, Scrollbar,
+    ScrollbarOrientation, ScrollbarVisibility, SizeProposal, Split, SplitDirection, SplitSize,
+    SplitState, Stack, VerticalAlign,
 };
 pub use crate::shell::{
     CommandDescriptor, CommandRouter, Hotkey, HotkeyRegistry, ModalManager, Navigator,
@@ -31,8 +32,8 @@ pub use crate::shell::{
 pub use crate::state::{Derived, FormState, Store, StoreKey};
 pub use crate::style::{BorderStyle, Color, EffectSlot, Padding, Style, Theme, ThemeEffects};
 pub use crate::widget::{
-    EventCtx, EventPhase, FocusRequest, IntoWidget, RenderCtx, Widget, WidgetId, WidgetKey,
-    WidgetPath, WidgetStore,
+    EventCtx, EventPhase, FocusRequest, IntoWidget, MeasureCtx, RenderCtx, Widget, WidgetId,
+    WidgetKey, WidgetPath, WidgetStore,
 };
 pub use crate::widgets::{
     animate, button, calendar, canvas, checkbox, code_viewer, collapsible, command_palette,

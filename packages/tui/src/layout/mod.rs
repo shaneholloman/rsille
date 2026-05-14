@@ -13,7 +13,7 @@ pub mod split;
 pub mod taffy_bridge;
 
 pub use alignment::{HorizontalAlign, VerticalAlign};
-pub use constraints::Constraints;
+pub use constraints::{AxisLimit, Constraints, LayoutStyle, MeasuredSize, Overflow, SizeProposal};
 pub use flex::{col, row, Direction, Flex};
 pub use grid::{grid, Grid};
 pub use grid_placement::{GridLine, GridPlacement};
