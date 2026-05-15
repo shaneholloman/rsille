@@ -48,10 +48,6 @@ name = "theme"
 path = "examples/themes/theme.rs"
 
 [[example]]
-name = "animated"
-path = "examples/motion/animated.rs"
-
-[[example]]
 name = "visual"
 path = "examples/motion/visual.rs"
 

@@ -178,6 +178,7 @@ mod tests {
     use render::area::Area;
     use render::buffer::Buffer;
     use render::chunk::Chunk;
+    use render::style::Style as RenderStyle;
     use std::cell::RefCell;
     use std::collections::HashMap;
 
@@ -230,6 +231,26 @@ mod tests {
         );
     }
 
+    #[test]
+    fn canvas_widget_preserves_existing_background_under_unstyled_pixels() {
+        let widget = canvas::<(), _>(|canvas, _ctx| {
+            canvas.set(0, 0);
+        });
+        let background = Colors {
+            foreground: None,
+            background: Some(Color::Blue),
+        };
+
+        let buffer =
+            render_widget_with_background(&widget, 2, 1, RenderStyle::with_colors(background));
+        let style = buffer.content()[0].content.style;
+
+        assert_eq!(
+            style.colors.and_then(|colors| colors.background),
+            Some(Color::Blue)
+        );
+    }
+
     fn render_widget<F>(widget: &CanvasWidget<(), F>, width: u16, height: u16) -> Buffer
     where
         F: Fn(&mut rsille_canvas::Canvas, CanvasContext),
@@ -243,6 +264,38 @@ mod tests {
         let geometry = RefCell::new(HashMap::<WidgetPath, Area>::new());
         let ctx = RenderCtx::new(&store, &animation_store, &theme, None, &geometry);
 
+        widget.render(&mut chunk, &ctx);
+        drop(chunk);
+        buffer
+    }
+
+    fn render_widget_with_background<F>(
+        widget: &CanvasWidget<(), F>,
+        width: u16,
+        height: u16,
+        background: RenderStyle,
+    ) -> Buffer
+    where
+        F: Fn(&mut rsille_canvas::Canvas, CanvasContext),
+    {
+        let mut buffer = Buffer::new((width, height).into());
+        let area = Area::new((0, 0).into(), (width, height).into());
+        let store = WidgetStore::new();
+        let animation_store = AnimationStore::new();
+        let theme = Theme::dark();
+        let geometry = RefCell::new(HashMap::<WidgetPath, Area>::new());
+        let ctx = RenderCtx::new(&store, &animation_store, &theme, None, &geometry);
+
+        {
+            let mut chunk = Chunk::new(&mut buffer, area).unwrap();
+            for y in 0..height {
+                for x in 0..width {
+                    let _ = chunk.set_char(x, y, ' ', background);
+                }
+            }
+        }
+
+        let mut chunk = Chunk::new(&mut buffer, area).unwrap();
         widget.render(&mut chunk, &ctx);
         drop(chunk);
         buffer

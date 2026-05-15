@@ -9,7 +9,7 @@ fn main() -> WidgetResult<()> {
 }
 
 fn view(_: &()) -> impl Widget<()> {
-    panel::<()>()
+    panel()
         .title("Canvas")
         .padding(Padding::uniform(1))
         .gap(1)

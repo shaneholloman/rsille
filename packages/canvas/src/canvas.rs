@@ -263,7 +263,7 @@ impl Draw for Canvas {
                 let x = x as u16;
                 let y = y as u16;
                 if chunk.is_inside(x, y) {
-                    chunk.set(x, y, (*p).into())?;
+                    chunk.set_forced(x, y, (*p).into())?;
                 }
             }
         }
