@@ -266,8 +266,11 @@ impl FocusManager {
     }
 
     pub fn request_focus(&mut self, path: &WidgetPath) -> bool {
-        let next = self.resolve_requested_path(path);
-        self.set_focus(next.map(|target| target.id))
+        let Some(next) = self.resolve_requested_path(path) else {
+            return false;
+        };
+
+        self.set_focus(Some(next.id))
     }
 
     pub fn clear(&mut self) -> bool {
@@ -576,6 +579,25 @@ mod tests {
             focus.current_path().cloned(),
             Some(path(&["dialog", "second"]))
         );
+    }
+
+    #[test]
+    fn requesting_unfocusable_path_preserves_current_focus() {
+        let tree = TestWidget::node(None, FocusConfig::None).with_children(vec![
+            Box::new(TestWidget::node(Some("first"), FocusConfig::Leaf)),
+            Box::new(TestWidget::node(Some("disabled"), FocusConfig::None)),
+            Box::new(TestWidget::node(Some("second"), FocusConfig::Leaf)),
+        ]);
+
+        let mut focus = FocusManager::new();
+        focus.rebuild(&tree);
+        assert_eq!(focus.current_path().cloned(), Some(path(&["first"])));
+
+        assert!(focus.request_focus(&path(&["second"])));
+        assert_eq!(focus.current_path().cloned(), Some(path(&["second"])));
+
+        assert!(!focus.request_focus(&path(&["disabled"])));
+        assert_eq!(focus.current_path().cloned(), Some(path(&["second"])));
     }
 
     #[test]
