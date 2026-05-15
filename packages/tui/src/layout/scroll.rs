@@ -703,8 +703,12 @@ impl<M> Widget<M> for ScrollView<M> {
         let Some(bounds) = ctx.bounds() else {
             return;
         };
-        let Some(metrics) = self.resolve_metrics(bounds, None) else {
-            return;
+        let metrics = {
+            let measure_ctx = ctx.measure_ctx();
+            let Some(metrics) = self.resolve_metrics(bounds, measure_ctx.as_ref()) else {
+                return;
+            };
+            metrics
         };
 
         let viewport_width = metrics.viewport.width() as usize;
@@ -1011,9 +1015,19 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::RefCell;
+    use std::collections::HashMap;
+
+    use crate::animation::AnimationStore;
+    use crate::event::{KeyEvent, KeyModifiers};
     use crate::style::Theme;
-    use crate::widget::{MeasureCtx, Widget, WidgetStore};
+    use crate::widget::{
+        EventCtx, MeasureCtx, RenderCtx, Widget, WidgetId, WidgetPath, WidgetStore,
+    };
+    use crate::widgets::visual::TerminalVisualCapabilities;
     use crate::widgets::{label, TextWrap};
+    use render::buffer::Buffer;
+    use render::chunk::Chunk;
 
     #[test]
     fn clamp_offset_stays_in_range() {
@@ -1045,6 +1059,52 @@ mod tests {
         assert_eq!(measured, MeasuredSize::new(8, 3));
         assert!(metrics.content_height > metrics.viewport.height() as usize);
         assert!(metrics.show_vertical_bar);
+    }
+
+    #[test]
+    fn scroll_view_event_uses_measurement_for_wrapped_child_content() {
+        let child = label::<()>("alpha beta gamma delta").wrap(TextWrap::Word);
+        let scroll = ScrollView::new(child).vertical().scroll_step(1);
+        let mut store = WidgetStore::new();
+        let animation_store = AnimationStore::new();
+        let theme = Theme::dark();
+        let geometry = RefCell::new(HashMap::<WidgetPath, Area>::new());
+        let mut buffer = Buffer::new((8, 3).into());
+        let area = Area::new((0, 0).into(), (8, 3).into());
+
+        {
+            let mut chunk = Chunk::new(&mut buffer, area).expect("chunk");
+            let render_ctx = RenderCtx::new(&store, &animation_store, &theme, None, &geometry);
+            scroll.render(&mut chunk, &render_ctx);
+        }
+
+        let geometry = geometry.borrow();
+        let mut messages = Vec::new();
+        let event = Event::Key(KeyEvent::new(KeyCode::Down, KeyModifiers::empty()));
+        let mut event_ctx = EventCtx::with_runtime(
+            &mut store,
+            &mut messages,
+            WidgetPath::root(),
+            WidgetId::root(),
+            WidgetId::root(),
+            None,
+            &geometry,
+            EventPhase::Target,
+            false,
+            &theme,
+            std::time::Instant::now(),
+            0,
+            TerminalVisualCapabilities::default(),
+        );
+
+        scroll.handle_event(&event, &mut event_ctx);
+        let outcome = event_ctx.finish();
+
+        assert!(outcome.handled);
+        let state = store
+            .get::<ScrollState>(WidgetId::root())
+            .expect("scroll state");
+        assert_eq!(state.offset_y, 1);
     }
 
     #[test]

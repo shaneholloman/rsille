@@ -785,8 +785,8 @@ impl<State, U, V, M: Send + 'static> AppRuntime<State, U, V, M> {
     fn build_event_route<'a>(
         tree: &'a dyn Widget<M>,
         target_path: Option<&WidgetPath>,
-    ) -> Vec<(WidgetPath, WidgetId, &'a dyn Widget<M>)> {
-        let mut route = vec![(WidgetPath::root(), WidgetId::root(), tree)];
+    ) -> Vec<(WidgetPath, WidgetId, WidgetId, &'a dyn Widget<M>)> {
+        let mut route = vec![(WidgetPath::root(), WidgetId::root(), WidgetId::root(), tree)];
         let Some(target_path) = target_path else {
             return route;
         };
@@ -815,7 +815,12 @@ impl<State, U, V, M: Send + 'static> AppRuntime<State, U, V, M> {
                 WidgetId::for_child(&current_id, &stable_scope_id, key);
             current_id = next_id;
             stable_scope_id = next_stable_scope_id;
-            route.push((current_path.clone(), current_id.clone(), next_widget));
+            route.push((
+                current_path.clone(),
+                current_id.clone(),
+                stable_scope_id.clone(),
+                next_widget,
+            ));
             current_widget = next_widget;
         }
 
@@ -829,20 +834,30 @@ impl<State, U, V, M: Send + 'static> AppRuntime<State, U, V, M> {
         messages: &mut Vec<M>,
         path: WidgetPath,
         id: WidgetId,
+        stable_scope_id: WidgetId,
         focused_path: Option<WidgetPath>,
         geometry: &HashMap<WidgetPath, render::area::Area>,
         phase: EventPhase,
         already_handled: bool,
+        theme: &Theme,
+        now: Instant,
+        frame: u64,
+        visual_capabilities: TerminalVisualCapabilities,
     ) -> crate::widget::EventOutcome {
-        let mut ctx = EventCtx::new(
+        let mut ctx = EventCtx::with_runtime(
             store,
             messages,
             path,
             id,
+            stable_scope_id,
             focused_path,
             geometry,
             phase,
             already_handled,
+            theme,
+            now,
+            frame,
+            visual_capabilities,
         );
         widget.handle_event(event, &mut ctx);
         ctx.finish()
@@ -881,6 +896,10 @@ impl<State, U, V, M: Send + 'static> AppRuntime<State, U, V, M> {
         geometry: &HashMap<WidgetPath, render::area::Area>,
         hit_regions: &[HitRegion],
         pointer_capture: Option<&WidgetPath>,
+        theme: &Theme,
+        now: Instant,
+        frame: u64,
+        visual_capabilities: TerminalVisualCapabilities,
     ) -> bool {
         let target_path = match mouse_position(event) {
             Some(_) => mouse_target_path(event, hit_regions, pointer_capture),
@@ -891,7 +910,7 @@ impl<State, U, V, M: Send + 'static> AppRuntime<State, U, V, M> {
         let focused_snapshot = focus.current_path().cloned();
         let ancestor_len = route.len().saturating_sub(1);
 
-        for (path, id, widget) in route.iter().take(ancestor_len) {
+        for (path, id, stable_scope_id, widget) in route.iter().take(ancestor_len) {
             let outcome = Self::dispatch_to_widget(
                 *widget,
                 event,
@@ -899,10 +918,15 @@ impl<State, U, V, M: Send + 'static> AppRuntime<State, U, V, M> {
                 messages,
                 path.clone(),
                 id.clone(),
+                stable_scope_id.clone(),
                 focused_snapshot.clone(),
                 geometry,
                 EventPhase::Capture,
                 handled,
+                theme,
+                now,
+                frame,
+                visual_capabilities,
             );
             handled |= outcome.handled;
             Self::apply_focus_request(focus, outcome.focus_request);
@@ -911,7 +935,7 @@ impl<State, U, V, M: Send + 'static> AppRuntime<State, U, V, M> {
             }
         }
 
-        if let Some((path, id, widget)) = route.last() {
+        if let Some((path, id, stable_scope_id, widget)) = route.last() {
             let outcome = Self::dispatch_to_widget(
                 *widget,
                 event,
@@ -919,10 +943,15 @@ impl<State, U, V, M: Send + 'static> AppRuntime<State, U, V, M> {
                 messages,
                 path.clone(),
                 id.clone(),
+                stable_scope_id.clone(),
                 focused_snapshot.clone(),
                 geometry,
                 EventPhase::Target,
                 handled,
+                theme,
+                now,
+                frame,
+                visual_capabilities,
             );
             handled |= outcome.handled;
             Self::apply_focus_request(focus, outcome.focus_request);
@@ -931,7 +960,7 @@ impl<State, U, V, M: Send + 'static> AppRuntime<State, U, V, M> {
             }
         }
 
-        for (path, id, widget) in route.iter().take(ancestor_len).rev() {
+        for (path, id, stable_scope_id, widget) in route.iter().take(ancestor_len).rev() {
             let outcome = Self::dispatch_to_widget(
                 *widget,
                 event,
@@ -939,10 +968,15 @@ impl<State, U, V, M: Send + 'static> AppRuntime<State, U, V, M> {
                 messages,
                 path.clone(),
                 id.clone(),
+                stable_scope_id.clone(),
                 focused_snapshot.clone(),
                 geometry,
                 EventPhase::Bubble,
                 handled,
+                theme,
+                now,
+                frame,
+                visual_capabilities,
             );
             handled |= outcome.handled;
             Self::apply_focus_request(focus, outcome.focus_request);
@@ -1487,6 +1521,10 @@ where
                 &geometry,
                 &hit_regions,
                 pointer_capture.as_ref(),
+                &self.theme,
+                Instant::now(),
+                self.render_frame,
+                self.visual_capabilities,
             ) {
                 continue;
             }

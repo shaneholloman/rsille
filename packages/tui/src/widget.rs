@@ -1157,6 +1157,7 @@ pub struct EventCtx<'a, M> {
     messages: &'a mut Vec<M>,
     path: WidgetPath,
     id: WidgetId,
+    stable_scope_id: WidgetId,
     focused_path: Option<WidgetPath>,
     geometry: &'a HashMap<WidgetPath, Area>,
     phase: EventPhase,
@@ -1164,6 +1165,10 @@ pub struct EventCtx<'a, M> {
     handled: bool,
     stop_propagation: bool,
     focus_request: Option<FocusRequest>,
+    theme: Option<&'a Theme>,
+    now: std::time::Instant,
+    frame: u64,
+    visual_capabilities: TerminalVisualCapabilities,
 }
 
 impl<'a, M> EventCtx<'a, M> {
@@ -1182,6 +1187,7 @@ impl<'a, M> EventCtx<'a, M> {
             messages,
             path,
             id,
+            stable_scope_id: WidgetId::root(),
             focused_path,
             geometry,
             phase,
@@ -1189,6 +1195,45 @@ impl<'a, M> EventCtx<'a, M> {
             handled: false,
             stop_propagation: false,
             focus_request: None,
+            theme: None,
+            now: std::time::Instant::now(),
+            frame: 0,
+            visual_capabilities: TerminalVisualCapabilities::default(),
+        }
+    }
+
+    pub(crate) fn with_runtime(
+        store: &'a mut WidgetStore,
+        messages: &'a mut Vec<M>,
+        path: WidgetPath,
+        id: WidgetId,
+        stable_scope_id: WidgetId,
+        focused_path: Option<WidgetPath>,
+        geometry: &'a HashMap<WidgetPath, Area>,
+        phase: EventPhase,
+        already_handled: bool,
+        theme: &'a Theme,
+        now: std::time::Instant,
+        frame: u64,
+        visual_capabilities: TerminalVisualCapabilities,
+    ) -> Self {
+        Self {
+            store,
+            messages,
+            path,
+            id,
+            stable_scope_id,
+            focused_path,
+            geometry,
+            phase,
+            already_handled,
+            handled: false,
+            stop_propagation: false,
+            focus_request: None,
+            theme: Some(theme),
+            now,
+            frame,
+            visual_capabilities,
         }
     }
 
@@ -1211,6 +1256,23 @@ impl<'a, M> EventCtx<'a, M> {
     /// The stable identity for the current widget.
     pub fn id(&self) -> &WidgetId {
         &self.id
+    }
+
+    /// Create a read-only measurement context at the current event target path.
+    ///
+    /// This is available when events are dispatched by the runtime. Manually
+    /// constructed contexts may not have theme/runtime metadata attached.
+    pub fn measure_ctx(&self) -> Option<MeasureCtx<'_>> {
+        Some(MeasureCtx {
+            store: &*self.store,
+            theme: self.theme?,
+            current_path: self.path.clone(),
+            current_id: self.id.clone(),
+            stable_scope_id: self.stable_scope_id.clone(),
+            now: self.now,
+            frame: self.frame,
+            visual_capabilities: self.visual_capabilities,
+        })
     }
 
     /// The globally focused path.
