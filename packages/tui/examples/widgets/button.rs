@@ -1,4 +1,4 @@
-//! Button — interactive buttons with messages
+//! Button widget variants and click messages.
 //!
 //! Run with: `cargo run -p tui --example button`
 //! Use Tab to focus buttons, Enter/Space to activate. Esc to quit.
@@ -27,18 +27,36 @@ fn update(state: &mut i32, msg: Msg) {
 }
 
 fn view(state: &i32) -> impl Widget<Msg> {
-    col::<Msg>()
+    panel::<Msg>()
+        .title("Button")
+        .padding(Padding::uniform(1))
+        .gap(1)
         .child(label(format!("Count: {}", state)))
         .child(divider())
         .child(
             row::<Msg>()
                 .gap(2)
-                .child(button("+1").on_click(|| Msg::Increment))
-                .child(button("-1").on_click(|| Msg::Decrement))
+                .child(
+                    button("+1")
+                        .variant(ButtonVariant::Primary)
+                        .on_click(|| Msg::Increment),
+                )
+                .child(
+                    button("-1")
+                        .variant(ButtonVariant::Secondary)
+                        .on_click(|| Msg::Decrement),
+                )
                 .child(
                     button("Reset")
-                        .variant(ButtonVariant::Secondary)
+                        .variant(ButtonVariant::Ghost)
                         .on_click(|| Msg::Reset),
                 ),
+        )
+        .child(
+            row::<Msg>()
+                .gap(2)
+                .child(button("Link").variant(ButtonVariant::Link))
+                .child(button("Delete").variant(ButtonVariant::Destructive))
+                .child(button("Disabled").disabled(true)),
         )
 }

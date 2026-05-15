@@ -17,5 +17,5 @@ fn view(_state: &()) -> impl Widget<()> {
     col::<()>()
         .child(label("Hello, TUI!"))
         .child(spacer())
-        .child(label("Press Tab to navigate, Esc to quit."))
+        .child(label("Press Esc to quit."))
 }

@@ -20,32 +20,40 @@ name = "hello"
 path = "examples/basics/hello.rs"
 
 [[example]]
+name = "flex"
+path = "examples/layout/flex.rs"
+
+[[example]]
 name = "grid"
 path = "examples/layout/grid.rs"
 
 [[example]]
-name = "layout"
-path = "examples/layout/layout.rs"
+name = "overlay"
+path = "examples/layout/overlay.rs"
 
 [[example]]
-name = "primitives"
-path = "examples/layout/primitives.rs"
+name = "scroll"
+path = "examples/layout/scroll.rs"
+
+[[example]]
+name = "split"
+path = "examples/layout/split.rs"
+
+[[example]]
+name = "stack"
+path = "examples/layout/stack.rs"
 
 [[example]]
 name = "theme"
 path = "examples/themes/theme.rs"
 
 [[example]]
-name = "async"
-path = "examples/apps/async.rs"
+name = "animated"
+path = "examples/motion/animated.rs"
 
 [[example]]
-name = "command_palette"
-path = "examples/apps/command_palette.rs"
-
-[[example]]
-name = "shell"
-path = "examples/apps/shell.rs"
+name = "visual"
+path = "examples/motion/visual.rs"
 
 [[example]]
 name = "button"
@@ -56,69 +64,109 @@ name = "calendar"
 path = "examples/widgets/calendar.rs"
 
 [[example]]
-name = "controls"
-path = "examples/widgets/controls.rs"
+name = "canvas"
+path = "examples/widgets/canvas.rs"
 
 [[example]]
-name = "layout_animation"
-path = "examples/widgets/layout_animation.rs"
+name = "checkbox"
+path = "examples/widgets/checkbox.rs"
 
 [[example]]
-name = "presence_animation"
-path = "examples/widgets/presence_animation.rs"
+name = "code_viewer"
+path = "examples/widgets/code_viewer.rs"
 
 [[example]]
-name = "visual_effects"
-path = "examples/widgets/visual_effects.rs"
+name = "collapsible"
+path = "examples/widgets/collapsible.rs"
 
 [[example]]
-name = "content_viewers"
-path = "examples/widgets/content_viewers.rs"
+name = "command_palette"
+path = "examples/widgets/command_palette.rs"
 
 [[example]]
 name = "data_table"
 path = "examples/widgets/data_table.rs"
 
 [[example]]
+name = "dialog"
+path = "examples/widgets/dialog.rs"
+
+[[example]]
+name = "diff_viewer"
+path = "examples/widgets/diff_viewer.rs"
+
+[[example]]
+name = "divider"
+path = "examples/widgets/divider.rs"
+
+[[example]]
 name = "file_explorer"
 path = "examples/widgets/file_explorer.rs"
 
 [[example]]
-name = "label_art"
-path = "examples/widgets/label_art.rs"
+name = "label"
+path = "examples/widgets/label.rs"
 
 [[example]]
 name = "list"
 path = "examples/widgets/list.rs"
 
 [[example]]
+name = "loading_indicator"
+path = "examples/widgets/loading_indicator.rs"
+
+[[example]]
+name = "log_viewer"
+path = "examples/widgets/log_viewer.rs"
+
+[[example]]
+name = "markdown_viewer"
+path = "examples/widgets/markdown_viewer.rs"
+
+[[example]]
+name = "menu"
+path = "examples/widgets/menu.rs"
+
+[[example]]
+name = "panel"
+path = "examples/widgets/panel.rs"
+
+[[example]]
+name = "progress"
+path = "examples/widgets/progress.rs"
+
+[[example]]
+name = "radio_group"
+path = "examples/widgets/radio_group.rs"
+
+[[example]]
 name = "select"
 path = "examples/widgets/select.rs"
+
+[[example]]
+name = "selection"
+path = "examples/widgets/selection.rs"
+
+[[example]]
+name = "spacer"
+path = "examples/widgets/spacer.rs"
+
+[[example]]
+name = "switch"
+path = "examples/widgets/switch.rs"
+
+[[example]]
+name = "tabs"
+path = "examples/widgets/tabs.rs"
 
 [[example]]
 name = "text_input"
 path = "examples/widgets/text_input.rs"
 
 [[example]]
+name = "textarea"
+path = "examples/widgets/textarea.rs"
+
+[[example]]
 name = "tree"
 path = "examples/widgets/tree.rs"
-
-[[example]]
-name = "equalizer"
-path = "examples/scenes/equalizer.rs"
-
-[[example]]
-name = "flame"
-path = "examples/scenes/flame.rs"
-
-[[example]]
-name = "hanoi"
-path = "examples/scenes/hanoi.rs"
-
-[[example]]
-name = "starfield"
-path = "examples/scenes/starfield.rs"
-
-[[example]]
-name = "wave"
-path = "examples/scenes/wave.rs"
