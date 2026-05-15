@@ -424,10 +424,15 @@ fn fit_axis(natural: u16, proposal: AxisLimit) -> u16 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::animation::AnimationStore;
     use crate::layout::LayoutStyle;
     use crate::style::Theme;
-    use crate::widget::{MeasureCtx, Widget, WidgetStore};
+    use crate::widget::{MeasureCtx, RenderCtx, Widget, WidgetPath, WidgetStore};
     use crate::widgets::label;
+    use render::buffer::Buffer;
+    use render::chunk::Chunk;
+    use std::cell::RefCell;
+    use std::collections::HashMap;
 
     #[test]
     fn vertical_flex_measures_children_with_fixed_width_and_sums_height() {
@@ -498,6 +503,27 @@ mod tests {
 
         assert_eq!(areas[0].width(), 6);
         assert_eq!(areas[1].width(), 14);
+    }
+
+    #[test]
+    fn root_flex_background_remains_under_child_label_text() {
+        let flex = col::<()>().child(label("Hello, TUI!"));
+        let mut buffer = Buffer::new((16, 2).into());
+        let area = Area::new((0, 0).into(), (16, 2).into());
+        let mut chunk = Chunk::new(&mut buffer, area).unwrap();
+        let store = WidgetStore::new();
+        let animation_store = AnimationStore::new();
+        let theme = Theme::dark();
+        let geometry = RefCell::new(HashMap::<WidgetPath, Area>::new());
+        let ctx = RenderCtx::new(&store, &animation_store, &theme, None, &geometry);
+
+        flex.render(&mut chunk, &ctx);
+
+        let cell = &buffer.content()[0];
+        let colors = cell.content.style.colors.unwrap();
+        let surface_colors = theme.styles.surface.to_render_style().colors.unwrap();
+        assert_eq!(cell.content.c, Some('H'));
+        assert_eq!(colors.background, surface_colors.background);
     }
 
     struct StyleWidget {
