@@ -89,9 +89,19 @@ impl Style {
     #[inline]
     pub fn merge(self, other: Style) -> Self {
         Self {
-            colors: other.colors.or(self.colors),
+            colors: merge_colors(self.colors, other.colors),
             attr: other.attr.or(self.attr),
         }
+    }
+}
+
+#[inline]
+fn merge_colors(base: Option<Colors>, overlay: Option<Colors>) -> Option<Colors> {
+    match (base, overlay) {
+        (Some(base), Some(overlay)) => Some(base.then(&overlay)),
+        (Some(base), None) => Some(base),
+        (None, Some(overlay)) => Some(overlay),
+        (None, None) => None,
     }
 }
 

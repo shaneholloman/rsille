@@ -108,6 +108,24 @@ impl<'a> Chunk<'a> {
         Chunk::new(self.buffer, area)
     }
 
+    /// Create a child chunk clipped to this chunk's bounds.
+    ///
+    /// The supplied area is in absolute terminal coordinates, matching
+    /// [`from_area`](Self::from_area). If the area has no overlap with the
+    /// current chunk, the closure is not called.
+    pub fn with_clip<R>(
+        &mut self,
+        area: Area,
+        render: impl FnOnce(&mut Chunk<'_>) -> R,
+    ) -> Result<Option<R>, DrawErr> {
+        let Some(clipped) = area.clamp_to(&self.area) else {
+            return Ok(None);
+        };
+
+        let mut chunk = Chunk::new(self.buffer, clipped)?;
+        Ok(Some(render(&mut chunk)))
+    }
+
     /// Set a string at the specified position with style
     /// This is a convenience method for TUI-style rendering
     pub fn set_string(

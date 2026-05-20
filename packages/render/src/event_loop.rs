@@ -5,15 +5,17 @@ use std::{
 
 use crossterm::{
     cursor::{position, Hide, MoveToNextLine, Show},
-    event::{DisableMouseCapture, EnableMouseCapture, Event, EventStream, KeyEvent},
+    event::{DisableMouseCapture, EnableMouseCapture, Event, EventStream, KeyEvent, MouseEvent},
     execute,
-    terminal::{Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen},
+    terminal::{
+        size as terminal_size, Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen,
+    },
 };
 use futures::{FutureExt, StreamExt};
 use log::{error, info, warn};
 use tokio::time::Instant as TokioInstant;
 
-use crate::{Builder, DrawErr, DrawUpdate, Render};
+use crate::{area::Size, Builder, DrawErr, DrawUpdate, InlineMouseMode, Render};
 
 struct TerminalGuard {
     hide_cursor: bool,
@@ -80,6 +82,9 @@ pub struct EventLoop<T> {
     mouse_capture: bool,
     hide_cursor: bool,
     inline_mode: bool,
+    inline_max_height: u16,
+    inline_mouse_mode: InlineMouseMode,
+    terminal_size: Size,
 }
 
 impl<T> EventLoop<T>
@@ -100,6 +105,9 @@ where
             mouse_capture: builder.enable_mouse_capture,
             hide_cursor: builder.enable_hide_cursor,
             inline_mode: builder.inline_mode,
+            inline_max_height: builder.inline_max_height,
+            inline_mouse_mode: builder.inline_mouse_mode,
+            terminal_size: builder.size,
         }
     }
 
@@ -180,6 +188,10 @@ where
         );
 
         if self.inline_mode {
+            if let Ok((width, height)) = terminal_size() {
+                self.terminal_size = (width, height).into();
+            }
+
             match position() {
                 Ok((x, y)) => {
                     self.render.pos = (x, y).into();
@@ -268,9 +280,17 @@ where
 
             for event in &events {
                 if let Event::Resize(width, height) = event {
-                    self.render.resize((*width, *height).into());
+                    self.terminal_size = (*width, *height).into();
+                    if self.inline_mode {
+                        self.render
+                            .resize((*width, self.inline_buffer_height(*height)).into());
+                    } else {
+                        self.render.resize((*width, *height).into());
+                    }
                 }
             }
+
+            let events = self.normalize_inline_mouse_events(events);
 
             if let Err(e) = self.render.on_events(&events) {
                 error!("Error processing events: {}", e);
@@ -300,9 +320,23 @@ where
                 }
             }
 
-            if !events.is_empty() || needs_render || self.render.has_pending_changes() {
+            let force_inline_frame =
+                self.inline_mode && self.inline_mouse_mode.force_follows_viewport();
+
+            if !events.is_empty()
+                || needs_render
+                || self.render.has_pending_changes()
+                || force_inline_frame
+            {
                 if let Err(e) = self.render.render() {
                     error!("Error rendering: {}", e);
+                } else {
+                    if force_inline_frame {
+                        if let Err(e) = self.render.force_inline_viewport_follow() {
+                            error!("Error following inline viewport: {}", e);
+                        }
+                    }
+                    self.align_inline_origin_after_render();
                 }
             }
 
@@ -323,6 +357,70 @@ where
         }
 
         Ok(())
+    }
+
+    fn inline_buffer_height(&self, viewport_height: u16) -> u16 {
+        let available = if self.inline_mouse_mode.force_follows_viewport() {
+            viewport_height.saturating_sub(1).max(1)
+        } else {
+            viewport_height
+        };
+
+        self.inline_max_height.min(available)
+    }
+
+    fn align_inline_origin_after_render(&mut self) {
+        if !self.inline_mode {
+            return;
+        }
+
+        let used_height = self.render.inline_used_height();
+        let bottom_padding = if self.inline_mouse_mode.force_follows_viewport() {
+            1
+        } else {
+            0
+        };
+        let reserved_height = used_height.saturating_add(bottom_padding);
+        let max_origin_y = self.terminal_size.height.saturating_sub(reserved_height);
+
+        if self.render.inline_origin().y > max_origin_y {
+            self.render.set_inline_origin_y(max_origin_y);
+        }
+    }
+
+    fn normalize_inline_mouse_events(&self, events: Vec<Event>) -> Vec<Event> {
+        if !self.inline_mode {
+            return events;
+        }
+
+        events
+            .into_iter()
+            .filter_map(|event| self.normalize_inline_mouse_event(event))
+            .collect()
+    }
+
+    fn normalize_inline_mouse_event(&self, event: Event) -> Option<Event> {
+        let Event::Mouse(mouse) = event else {
+            return Some(event);
+        };
+
+        let origin = self.render.inline_origin();
+        if mouse.column < origin.x || mouse.row < origin.y {
+            return None;
+        }
+
+        let column = mouse.column - origin.x;
+        let row = mouse.row - origin.y;
+        if column >= self.render.inline_width() || row >= self.render.inline_used_height() {
+            return None;
+        }
+
+        Some(Event::Mouse(MouseEvent {
+            kind: mouse.kind,
+            column,
+            row,
+            modifiers: mouse.modifiers,
+        }))
     }
 }
 
@@ -430,4 +528,75 @@ fn is_exit_event(event: &Event, exit_code: Option<KeyEvent>) -> bool {
         (event, exit_code),
         (Event::Key(key_event), Some(exit_key)) if *key_event == exit_key
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use crossterm::event::{KeyModifiers, MouseButton, MouseEventKind};
+
+    use super::*;
+    use crate::{area::Size, chunk::Chunk, Draw, Update};
+
+    struct Noop;
+
+    impl Draw for Noop {
+        fn draw(&mut self, _chunk: Chunk) -> Result<Size, DrawErr> {
+            Ok((0, 0).into())
+        }
+    }
+
+    impl Update for Noop {
+        fn on_events(&mut self, _events: &[Event]) -> Result<(), DrawErr> {
+            Ok(())
+        }
+
+        fn update(&mut self) -> Result<bool, DrawErr> {
+            Ok(false)
+        }
+    }
+
+    fn inline_loop() -> EventLoop<Noop> {
+        let mut builder = Builder::new();
+        builder.inline_mode(true).size((20, 5));
+        let mut event_loop = builder.build_event_loop(Noop);
+        event_loop.render.pos = (2, 3).into();
+        event_loop.render.set_used_height(4);
+        event_loop
+    }
+
+    #[test]
+    fn inline_mouse_coordinates_are_translated_to_local_space() {
+        let event_loop = inline_loop();
+        let event = Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 7,
+            row: 5,
+            modifiers: KeyModifiers::empty(),
+        });
+
+        let normalized = event_loop.normalize_inline_mouse_event(event);
+
+        assert_eq!(
+            normalized,
+            Some(Event::Mouse(MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column: 5,
+                row: 2,
+                modifiers: KeyModifiers::empty(),
+            }))
+        );
+    }
+
+    #[test]
+    fn inline_mouse_events_outside_rendered_area_are_dropped() {
+        let event_loop = inline_loop();
+        let event = Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 7,
+            row: 8,
+            modifiers: KeyModifiers::empty(),
+        });
+
+        assert_eq!(event_loop.normalize_inline_mouse_event(event), None);
+    }
 }

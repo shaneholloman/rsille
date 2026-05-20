@@ -6,9 +6,9 @@ use super::border_renderer::{render_background, render_border};
 use super::taffy_bridge::TaffyBridge;
 use crate::event::Event;
 use crate::focus::{FocusConfig, FocusScope};
-use crate::layout::Constraints;
-use crate::style::{BorderStyle, Padding, Style, ThemeManager};
-use crate::widget::{EventCtx, IntoWidget, RenderCtx, Widget, WidgetKey};
+use crate::layout::{AxisLimit, Constraints, MeasuredSize, SizeProposal};
+use crate::style::{BorderStyle, Padding, Style};
+use crate::widget::{EventCtx, IntoWidget, MeasureCtx, RenderCtx, Widget, WidgetKey};
 use taffy::style::{AlignItems, JustifyContent};
 
 /// Layout direction
@@ -174,9 +174,13 @@ impl<M> Widget<M> for Flex<M> {
             return;
         }
 
-        let theme_style = ThemeManager::global().with_theme(|theme| theme.styles.surface);
-        let final_style = self.style.merge(theme_style);
-        let render_style = final_style.to_render_style();
+        let surface_style = self.style.merge(ctx.theme().styles.surface);
+        let border_style = self
+            .style
+            .merge(ctx.theme().styles.border.merge(ctx.theme().styles.surface));
+        let render_style = surface_style.to_render_style();
+        let border_render_style = border_style.to_render_style();
+        let should_fill_background = ctx.path().is_empty() || self.style.bg_color.is_some();
 
         let border_area = if self.border.is_some() {
             if area.width() < 2 || area.height() < 2 {
@@ -190,12 +194,12 @@ impl<M> Widget<M> for Flex<M> {
             area
         };
 
-        if final_style.bg_color.is_some() {
+        if should_fill_background {
             render_background(chunk, render_style);
         }
 
         if let Some(border) = self.border {
-            render_border(chunk, border, render_style);
+            render_border(chunk, border, border_render_style);
         }
 
         let inner = border_area.shrink_saturating(
@@ -210,13 +214,15 @@ impl<M> Widget<M> for Flex<M> {
         }
 
         let mut bridge = TaffyBridge::new();
-        let child_areas = match bridge.compute_layout(
+        let measure_ctx = ctx.measure_ctx();
+        let child_areas = match bridge.compute_layout_measured(
             &self.children,
             inner,
             self.direction,
             self.gap,
             self.align_items,
             self.justify_content,
+            &measure_ctx,
         ) {
             Ok(areas) => areas,
             Err(_) => return,
@@ -227,14 +233,16 @@ impl<M> Widget<M> for Flex<M> {
                 continue;
             }
 
-            if !child_area.intersects(&inner) {
+            let Some(child_area) = child_area.clamp_to(&border_area) else {
                 continue;
-            }
+            };
 
-            if let Ok(mut child_chunk) = chunk.from_area(child_area) {
-                let child_ctx = ctx.child_ctx(WidgetKey::for_child(index, child.as_ref()));
-                child.render(&mut child_chunk, &child_ctx);
-            }
+            ctx.render_child_at(
+                chunk,
+                WidgetKey::for_child(index, child.as_ref()),
+                child.as_ref(),
+                child_area,
+            );
         }
     }
 
@@ -310,6 +318,61 @@ impl<M> Widget<M> for Flex<M> {
         }
     }
 
+    fn measure(&self, proposal: SizeProposal, ctx: &MeasureCtx) -> MeasuredSize {
+        let border_size = if self.border.is_some() { 2 } else { 0 };
+        let horizontal_chrome = self.padding.horizontal_total().saturating_add(border_size);
+        let vertical_chrome = self.padding.vertical_total().saturating_add(border_size);
+        let inner_width = subtract_limit(proposal.width, horizontal_chrome);
+        let inner_height = subtract_limit(proposal.height, vertical_chrome);
+        let gap_total = self
+            .gap
+            .saturating_mul(self.children.len().saturating_sub(1) as u16);
+
+        let measured = match self.direction {
+            Direction::Vertical => {
+                let mut width: u16 = 0;
+                let mut height: u16 = gap_total;
+                for (index, child) in self.children.iter().enumerate() {
+                    let child_ctx = ctx.child_ctx(WidgetKey::for_child(index, child.as_ref()));
+                    let child_size = child.measure(
+                        SizeProposal {
+                            width: inner_width,
+                            height: AxisLimit::Unbounded,
+                        },
+                        &child_ctx,
+                    );
+                    width = width.max(child_size.width);
+                    height = height.saturating_add(child_size.height);
+                }
+                MeasuredSize::new(width, height)
+            }
+            Direction::Horizontal => {
+                let mut width: u16 = gap_total;
+                let mut height: u16 = 0;
+                for (index, child) in self.children.iter().enumerate() {
+                    let child_ctx = ctx.child_ctx(WidgetKey::for_child(index, child.as_ref()));
+                    let child_size = child.measure(
+                        SizeProposal {
+                            width: AxisLimit::Unbounded,
+                            height: inner_height,
+                        },
+                        &child_ctx,
+                    );
+                    width = width.saturating_add(child_size.width);
+                    height = height.max(child_size.height);
+                }
+                MeasuredSize::new(width, height)
+            }
+        };
+
+        let natural_width = measured.width.saturating_add(horizontal_chrome);
+        let natural_height = measured.height.saturating_add(vertical_chrome);
+        self.layout_style().clamp_size(MeasuredSize::new(
+            fit_axis(natural_width, proposal.width),
+            fit_axis(natural_height, proposal.height),
+        ))
+    }
+
     fn children(&self) -> &[Box<dyn Widget<M>>] {
         &self.children
     }
@@ -340,4 +403,158 @@ pub fn col<M>() -> Flex<M> {
 /// Create a new empty horizontal flex layout.
 pub fn row<M>() -> Flex<M> {
     Flex::horizontal(Vec::new())
+}
+
+fn subtract_limit(limit: AxisLimit, amount: u16) -> AxisLimit {
+    match limit {
+        AxisLimit::Unbounded => AxisLimit::Unbounded,
+        AxisLimit::AtMost(value) => AxisLimit::AtMost(value.saturating_sub(amount)),
+        AxisLimit::Exact(value) => AxisLimit::Exact(value.saturating_sub(amount)),
+    }
+}
+
+fn fit_axis(natural: u16, proposal: AxisLimit) -> u16 {
+    match proposal {
+        AxisLimit::Unbounded => natural,
+        AxisLimit::AtMost(max) => natural.min(max),
+        AxisLimit::Exact(value) => value,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::animation::AnimationStore;
+    use crate::layout::LayoutStyle;
+    use crate::style::Theme;
+    use crate::widget::{MeasureCtx, RenderCtx, Widget, WidgetPath, WidgetStore};
+    use crate::widgets::label;
+    use render::buffer::Buffer;
+    use render::chunk::Chunk;
+    use std::cell::RefCell;
+    use std::collections::HashMap;
+
+    #[test]
+    fn vertical_flex_measures_children_with_fixed_width_and_sums_height() {
+        let flex = col::<()>()
+            .gap(1)
+            .child(label("head"))
+            .child(label("body\ntail"));
+        let store = WidgetStore::new();
+        let theme = Theme::dark();
+        let ctx = MeasureCtx::new(&store, &theme);
+
+        let measured = flex.measure(
+            SizeProposal {
+                width: AxisLimit::Exact(12),
+                height: AxisLimit::AtMost(20),
+            },
+            &ctx,
+        );
+
+        assert_eq!(measured.width, 12);
+        assert_eq!(measured.height, 4);
+    }
+
+    #[test]
+    fn horizontal_flex_measures_children_and_keeps_natural_height() {
+        let flex = row::<()>()
+            .gap(2)
+            .child(label("left"))
+            .child(label("right"));
+        let store = WidgetStore::new();
+        let theme = Theme::dark();
+        let ctx = MeasureCtx::new(&store, &theme);
+
+        let measured = flex.measure(
+            SizeProposal {
+                width: AxisLimit::AtMost(20),
+                height: AxisLimit::Exact(3),
+            },
+            &ctx,
+        );
+
+        assert_eq!(measured.width, 11);
+        assert_eq!(measured.height, 1);
+    }
+
+    #[test]
+    fn horizontal_flex_layout_respects_preferred_width_before_growing_remainder() {
+        let widgets: Vec<Box<dyn Widget<()>>> = vec![
+            Box::new(StyleWidget::new(LayoutStyle::min(2, 1).preferred_width(6))),
+            Box::new(StyleWidget::new(LayoutStyle::min(0, 1).flex(1.0))),
+        ];
+        let store = WidgetStore::new();
+        let theme = Theme::dark();
+        let ctx = MeasureCtx::new(&store, &theme);
+        let mut bridge = TaffyBridge::new();
+
+        let areas = bridge
+            .compute_layout_measured(
+                &widgets,
+                Area::new((0, 0).into(), (20, 1).into()),
+                Direction::Horizontal,
+                0,
+                None,
+                None,
+                &ctx,
+            )
+            .expect("layout");
+
+        assert_eq!(areas[0].width(), 6);
+        assert_eq!(areas[1].width(), 14);
+    }
+
+    #[test]
+    fn root_flex_background_remains_under_child_label_text() {
+        let flex = col::<()>().child(label("Hello, TUI!"));
+        let mut buffer = Buffer::new((16, 2).into());
+        let area = Area::new((0, 0).into(), (16, 2).into());
+        let mut chunk = Chunk::new(&mut buffer, area).unwrap();
+        let store = WidgetStore::new();
+        let animation_store = AnimationStore::new();
+        let theme = Theme::dark();
+        let geometry = RefCell::new(HashMap::<WidgetPath, Area>::new());
+        let ctx = RenderCtx::new(&store, &animation_store, &theme, None, &geometry);
+
+        flex.render(&mut chunk, &ctx);
+
+        let cell = &buffer.content()[0];
+        let colors = cell.content.style.colors.unwrap();
+        let surface_colors = theme.styles.surface.to_render_style().colors.unwrap();
+        assert_eq!(cell.content.c, Some('H'));
+        assert_eq!(colors.background, surface_colors.background);
+    }
+
+    struct StyleWidget {
+        style: LayoutStyle,
+    }
+
+    impl StyleWidget {
+        fn new(style: LayoutStyle) -> Self {
+            Self { style }
+        }
+    }
+
+    impl Widget<()> for StyleWidget {
+        fn render(&self, _chunk: &mut render::chunk::Chunk, _ctx: &RenderCtx) {}
+
+        fn constraints(&self) -> Constraints {
+            Constraints {
+                min_width: self.style.min_width,
+                max_width: self.style.max_width,
+                min_height: self.style.min_height,
+                max_height: self.style.max_height,
+                flex: (self.style.flex_grow > 0.0).then_some(self.style.flex_grow),
+            }
+        }
+
+        fn layout_style(&self) -> LayoutStyle {
+            self.style
+        }
+
+        fn measure(&self, proposal: SizeProposal, _ctx: &MeasureCtx) -> MeasuredSize {
+            self.style.resolve_fallback_size(proposal)
+        }
+    }
 }

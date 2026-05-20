@@ -88,6 +88,10 @@ impl Buffer {
                 }
             }
 
+            let base_style = self.content[i].content.style;
+            let mut content = content;
+            content.style = base_style.merge(content.style);
+
             self.content[i] = Cell::new(content);
             self.dirty = true; // Mark dirty when content changes
             for j in i + 1..i + width {
@@ -120,6 +124,16 @@ impl Buffer {
         // Reset all cells in the now-current buffer to empty
         self.content.fill(Cell::space());
         // Reset dirty flag after saving state
+        self.dirty = false;
+    }
+
+    /// Clear the current buffer content without preserving diff state.
+    ///
+    /// This is useful for transient offscreen buffers where callers want to
+    /// reuse allocation but do not need frame-to-frame diffing.
+    pub fn clear_content(&mut self) {
+        self.content.fill(Cell::space());
+        self.previous = None;
         self.dirty = false;
     }
 
@@ -429,6 +443,8 @@ impl Cell {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::style::Style;
+    use crossterm::style::{Color, Colors};
 
     #[test]
     fn test_buffer_resize() {
@@ -527,6 +543,36 @@ mod tests {
         // Should have no differences
         let diff: Vec<_> = buffer.diff().unwrap().collect();
         assert_eq!(diff.len(), 0);
+    }
+
+    #[test]
+    fn overwrite_preserves_existing_background_when_overlay_only_sets_foreground() {
+        let mut buffer = Buffer::new(Size {
+            width: 1,
+            height: 1,
+        });
+
+        let base_style = Style::with_colors(Colors {
+            foreground: None,
+            background: Some(Color::Blue),
+        });
+        let text_style = Style::with_colors(Colors {
+            foreground: Some(Color::White),
+            background: None,
+        });
+
+        buffer
+            .overwrite(Position { x: 0, y: 0 }, Stylized::new(' ', base_style))
+            .unwrap();
+        buffer
+            .overwrite(Position { x: 0, y: 0 }, Stylized::new('H', text_style))
+            .unwrap();
+
+        let cell = &buffer.content()[0];
+        let colors = cell.content.style.colors.unwrap();
+        assert_eq!(cell.content.c, Some('H'));
+        assert_eq!(colors.foreground, Some(Color::White));
+        assert_eq!(colors.background, Some(Color::Blue));
     }
 
     #[test]

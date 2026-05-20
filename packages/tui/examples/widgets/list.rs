@@ -9,6 +9,7 @@ use tui::prelude::*;
 enum Msg {
     Highlighted(String),
     Submitted(String),
+    Selected(Vec<String>),
     Confirm,
 }
 
@@ -16,6 +17,7 @@ enum Msg {
 struct State {
     active: String,
     submitted: String,
+    selected: Vec<String>,
 }
 
 impl Default for State {
@@ -23,6 +25,7 @@ impl Default for State {
         Self {
             active: "focus".to_owned(),
             submitted: String::new(),
+            selected: Vec::new(),
         }
     }
 }
@@ -35,6 +38,7 @@ fn update(state: &mut State, msg: Msg) {
     match msg {
         Msg::Highlighted(id) => state.active = id,
         Msg::Submitted(id) => state.submitted = id,
+        Msg::Selected(ids) => state.selected = ids,
         Msg::Confirm => state.submitted = state.active.clone(),
     }
 }
@@ -51,6 +55,7 @@ fn view(state: &State) -> impl Widget<Msg> {
             list::<Msg>()
                 .key("milestones")
                 .height(8)
+                .multi_select(true)
                 .items([
                     ListItem::new("focus", "Scope-aware focus manager"),
                     ListItem::new("routing", "Capture/target/bubble event routing"),
@@ -59,6 +64,7 @@ fn view(state: &State) -> impl Widget<Msg> {
                     ListItem::new("tests", "Regression coverage"),
                 ])
                 .on_change(Msg::Highlighted)
+                .on_selection_change(Msg::Selected)
                 .on_submit(Msg::Submitted),
         )
         .child(
@@ -82,4 +88,5 @@ fn view(state: &State) -> impl Widget<Msg> {
                 &state.submitted
             }
         )))
+        .child(label(format!("Selected count: {}", state.selected.len())))
 }

@@ -9,12 +9,14 @@ use tui::prelude::*;
 enum Msg {
     Focused(String),
     Opened(String),
+    Selected(Vec<String>),
 }
 
 #[derive(Debug, Default)]
 struct State {
     active: String,
     opened: String,
+    selected: Vec<String>,
 }
 
 fn main() -> WidgetResult<()> {
@@ -25,6 +27,7 @@ fn update(state: &mut State, msg: Msg) {
     match msg {
         Msg::Focused(id) => state.active = id,
         Msg::Opened(id) => state.opened = id,
+        Msg::Selected(ids) => state.selected = ids,
     }
 }
 
@@ -36,6 +39,7 @@ fn view(state: &State) -> impl Widget<Msg> {
             tree::<Msg>()
                 .key("workspace")
                 .height(16)
+                .multi_select(true)
                 .items([
                     TreeItem::new("packages", "packages")
                         .child(
@@ -107,6 +111,7 @@ fn view(state: &State) -> impl Widget<Msg> {
                         .child(TreeItem::new("scripts/release.sh", "release.sh")),
                 ])
                 .on_change(Msg::Focused)
+                .on_selection_change(Msg::Selected)
                 .on_submit(Msg::Opened),
         )
         .child(
@@ -134,6 +139,7 @@ fn view(state: &State) -> impl Widget<Msg> {
                         &state.opened
                     }
                 )))
+                .child(label(format!("Selected nodes: {}", state.selected.len())))
                 .child(
                     button("Open current leaf")
                         .variant(ButtonVariant::Secondary)

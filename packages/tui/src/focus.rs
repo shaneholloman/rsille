@@ -1,6 +1,6 @@
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use crate::widget::{Widget, WidgetKey, WidgetPath};
+use crate::widget::{Widget, WidgetId, WidgetKey, WidgetPath};
 
 /// How a widget participates in keyboard focus.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -70,40 +70,89 @@ impl FocusScope {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FocusTarget {
+    pub id: WidgetId,
+    pub path: WidgetPath,
+}
+
+#[derive(Debug, Clone)]
+struct ScopeNode {
+    id: WidgetId,
+    path: WidgetPath,
+    scope: FocusScope,
+}
+
 /// Snapshot of the focus-relevant parts of the current widget tree.
 #[derive(Debug, Default, Clone)]
 pub struct FocusAnalysis {
     live_paths: FxHashSet<WidgetPath>,
-    focus_targets: Vec<WidgetPath>,
-    focus_target_set: FxHashSet<WidgetPath>,
-    scopes: FxHashMap<WidgetPath, FocusScope>,
+    live_ids: FxHashSet<WidgetId>,
+    id_by_path: FxHashMap<WidgetPath, WidgetId>,
+    path_by_id: FxHashMap<WidgetId, WidgetPath>,
+    focus_targets: Vec<FocusTarget>,
+    focus_target_ids: FxHashSet<WidgetId>,
+    scopes_by_path: FxHashMap<WidgetPath, ScopeNode>,
+    scopes_by_id: FxHashMap<WidgetId, ScopeNode>,
 }
 
 impl FocusAnalysis {
     pub fn analyze<M>(root: &dyn Widget<M>) -> Self {
         let mut analysis = Self::default();
         let mut path = WidgetPath::root();
-        Self::walk(root, &mut path, &mut analysis);
+        let id = WidgetId::root();
+        let stable_scope_id = WidgetId::root();
+        Self::walk(root, &mut path, id, stable_scope_id, &mut analysis);
         analysis
     }
 
-    fn walk<M>(widget: &dyn Widget<M>, path: &mut WidgetPath, analysis: &mut Self) {
+    fn walk<M>(
+        widget: &dyn Widget<M>,
+        path: &mut WidgetPath,
+        id: WidgetId,
+        stable_scope_id: WidgetId,
+        analysis: &mut Self,
+    ) {
         analysis.live_paths.insert(path.clone());
+        analysis.live_ids.insert(id.clone());
+        analysis.id_by_path.insert(path.clone(), id.clone());
+        analysis
+            .path_by_id
+            .entry(id.clone())
+            .or_insert(path.clone());
 
         match widget.focus_config() {
             FocusConfig::Leaf | FocusConfig::Composite => {
-                analysis.focus_target_set.insert(path.clone());
-                analysis.focus_targets.push(path.clone());
+                analysis.focus_target_ids.insert(id.clone());
+                analysis.focus_targets.push(FocusTarget {
+                    id: id.clone(),
+                    path: path.clone(),
+                });
             }
             FocusConfig::Scope(scope) => {
-                analysis.scopes.insert(path.clone(), scope);
+                let node = ScopeNode {
+                    id: id.clone(),
+                    path: path.clone(),
+                    scope,
+                };
+                analysis.scopes_by_path.insert(path.clone(), node.clone());
+                analysis.scopes_by_id.insert(id.clone(), node);
             }
             FocusConfig::None => {}
         }
 
         for (index, child) in widget.children().iter().enumerate() {
-            path.push(WidgetKey::for_child(index, child.as_ref()));
-            Self::walk(child.as_ref(), path, analysis);
+            let key = WidgetKey::for_child(index, child.as_ref());
+            let (child_id, child_stable_scope_id) =
+                WidgetId::for_child(&id, &stable_scope_id, &key);
+            path.push(key);
+            Self::walk(
+                child.as_ref(),
+                path,
+                child_id,
+                child_stable_scope_id,
+                analysis,
+            );
             path.pop();
         }
     }
@@ -112,7 +161,11 @@ impl FocusAnalysis {
         &self.live_paths
     }
 
-    pub fn focus_targets(&self) -> &[WidgetPath] {
+    pub fn live_ids(&self) -> &FxHashSet<WidgetId> {
+        &self.live_ids
+    }
+
+    pub fn focus_targets(&self) -> &[FocusTarget] {
         &self.focus_targets
     }
 
@@ -120,31 +173,43 @@ impl FocusAnalysis {
         self.live_paths.contains(path)
     }
 
-    pub fn is_focus_target(&self, path: &WidgetPath) -> bool {
-        self.focus_target_set.contains(path)
+    pub fn id_for_path(&self, path: &WidgetPath) -> Option<&WidgetId> {
+        self.id_by_path.get(path)
+    }
+
+    pub fn path_for_id(&self, id: &WidgetId) -> Option<&WidgetPath> {
+        self.path_by_id.get(id)
+    }
+
+    pub fn is_focus_target_id(&self, id: &WidgetId) -> bool {
+        self.focus_target_ids.contains(id)
     }
 
     pub fn scope(&self, path: &WidgetPath) -> Option<&FocusScope> {
-        self.scopes.get(path)
+        self.scopes_by_path.get(path).map(|node| &node.scope)
     }
 
-    pub fn scopes(&self) -> &FxHashMap<WidgetPath, FocusScope> {
-        &self.scopes
+    fn scope_node(&self, path: &WidgetPath) -> Option<&ScopeNode> {
+        self.scopes_by_path.get(path)
+    }
+
+    fn scope_node_by_id(&self, id: &WidgetId) -> Option<&ScopeNode> {
+        self.scopes_by_id.get(id)
     }
 
     pub fn descendant_targets<'a>(
         &'a self,
         scope_path: &'a WidgetPath,
-    ) -> impl Iterator<Item = &'a WidgetPath> + 'a {
+    ) -> impl Iterator<Item = &'a FocusTarget> + 'a {
         self.focus_targets
             .iter()
-            .filter(move |path| path.starts_with(scope_path))
+            .filter(move |target| target.path.starts_with(scope_path))
     }
 
-    pub fn first_descendant_target(&self, path: &WidgetPath) -> Option<&WidgetPath> {
+    pub fn first_descendant_target(&self, path: &WidgetPath) -> Option<&FocusTarget> {
         self.focus_targets
             .iter()
-            .find(|candidate| candidate.starts_with(path))
+            .find(|target| target.path.starts_with(path))
     }
 }
 
@@ -152,8 +217,8 @@ impl FocusAnalysis {
 #[derive(Debug, Default)]
 pub struct FocusManager {
     analysis: FocusAnalysis,
-    focused_path: Option<WidgetPath>,
-    scope_memory: FxHashMap<WidgetPath, WidgetPath>,
+    focused_id: Option<WidgetId>,
+    scope_memory: FxHashMap<WidgetId, WidgetId>,
 }
 
 impl FocusManager {
@@ -162,31 +227,50 @@ impl FocusManager {
     }
 
     pub fn rebuild<M>(&mut self, root: &dyn Widget<M>) {
-        let old_focus = self.focused_path.clone();
+        let old_focus = self.focused_id.clone();
         self.analysis = FocusAnalysis::analyze(root);
         self.prune_scope_memory();
 
-        self.focused_path = old_focus
+        self.focused_id = old_focus
             .as_ref()
-            .and_then(|path| self.resolve_requested_path(path))
-            .or_else(|| self.analysis.focus_targets().first().cloned());
+            .filter(|id| self.analysis.is_focus_target_id(id))
+            .cloned()
+            .or_else(|| {
+                self.analysis
+                    .focus_targets()
+                    .first()
+                    .map(|target| target.id.clone())
+            });
 
-        if let Some(focused) = self.focused_path.clone() {
+        if let Some(focused) = self.focused_id.clone() {
             self.remember_focus(&focused);
         }
     }
 
+    pub fn current_id(&self) -> Option<&WidgetId> {
+        self.focused_id.as_ref()
+    }
+
     pub fn current_path(&self) -> Option<&WidgetPath> {
-        self.focused_path.as_ref()
+        self.focused_id
+            .as_ref()
+            .and_then(|id| self.analysis.path_for_id(id))
     }
 
     pub fn live_paths(&self) -> &FxHashSet<WidgetPath> {
         self.analysis.live_paths()
     }
 
+    pub fn live_ids(&self) -> &FxHashSet<WidgetId> {
+        self.analysis.live_ids()
+    }
+
     pub fn request_focus(&mut self, path: &WidgetPath) -> bool {
-        let next = self.resolve_requested_path(path);
-        self.set_focus(next)
+        let Some(next) = self.resolve_requested_path(path) else {
+            return false;
+        };
+
+        self.set_focus(Some(next.id))
     }
 
     pub fn clear(&mut self) -> bool {
@@ -226,15 +310,18 @@ impl FocusManager {
     }
 
     pub fn is_focus_within(&self, path: &WidgetPath) -> bool {
-        self.focused_path
-            .as_ref()
+        self.current_path()
             .map(|focused| focused.starts_with(path))
             .unwrap_or(false)
     }
 
-    fn resolve_requested_path(&self, path: &WidgetPath) -> Option<WidgetPath> {
-        if self.analysis.is_focus_target(path) {
-            return Some(path.clone());
+    fn resolve_requested_path(&self, path: &WidgetPath) -> Option<FocusTarget> {
+        let id = self.analysis.id_for_path(path)?;
+        if self.analysis.is_focus_target_id(id) {
+            return Some(FocusTarget {
+                id: id.clone(),
+                path: path.clone(),
+            });
         }
 
         if self.analysis.scope(path).is_some() {
@@ -248,13 +335,14 @@ impl FocusManager {
         None
     }
 
-    fn resolve_scope_entry(&self, scope_path: &WidgetPath) -> Option<WidgetPath> {
-        let scope = self.analysis.scope(scope_path)?;
+    fn resolve_scope_entry(&self, scope_path: &WidgetPath) -> Option<FocusTarget> {
+        let scope_node = self.analysis.scope_node(scope_path)?;
+        let scope = &scope_node.scope;
 
         if matches!(scope.entry, ScopeEntry::LastFocused) {
-            if let Some(remembered) = self.scope_memory.get(scope_path) {
-                if self.analysis.is_focus_target(remembered) && remembered.starts_with(scope_path) {
-                    return Some(remembered.clone());
+            if let Some(remembered) = self.scope_memory.get(&scope_node.id) {
+                if let Some(target) = self.target_by_id_within(remembered, scope_path) {
+                    return Some(target);
                 }
             }
         }
@@ -262,7 +350,7 @@ impl FocusManager {
         if let ScopeEntry::Child(ref key) = scope.entry {
             let requested = scope_path.child(key.clone());
             if let Some(target) = self.resolve_requested_path(&requested) {
-                if target.starts_with(scope_path) {
+                if target.path.starts_with(scope_path) {
                     return Some(target);
                 }
             }
@@ -275,9 +363,9 @@ impl FocusManager {
         }
 
         if scope.restore_focus {
-            if let Some(remembered) = self.scope_memory.get(scope_path) {
-                if self.analysis.is_focus_target(remembered) && remembered.starts_with(scope_path) {
-                    return Some(remembered.clone());
+            if let Some(remembered) = self.scope_memory.get(&scope_node.id) {
+                if let Some(target) = self.target_by_id_within(remembered, scope_path) {
+                    return Some(target);
                 }
             }
         }
@@ -285,12 +373,23 @@ impl FocusManager {
         self.analysis.first_descendant_target(scope_path).cloned()
     }
 
-    fn set_focus(&mut self, next: Option<WidgetPath>) -> bool {
-        if self.focused_path == next {
+    fn target_by_id_within(&self, id: &WidgetId, scope_path: &WidgetPath) -> Option<FocusTarget> {
+        if !self.analysis.is_focus_target_id(id) {
+            return None;
+        }
+        let path = self.analysis.path_for_id(id)?;
+        path.starts_with(scope_path).then(|| FocusTarget {
+            id: id.clone(),
+            path: path.clone(),
+        })
+    }
+
+    fn set_focus(&mut self, next: Option<WidgetId>) -> bool {
+        if self.focused_id == next {
             return false;
         }
-        self.focused_path = next;
-        if let Some(focused) = self.focused_path.clone() {
+        self.focused_id = next;
+        if let Some(focused) = self.focused_id.clone() {
             self.remember_focus(&focused);
         }
         true
@@ -303,9 +402,9 @@ impl FocusManager {
         }
 
         let next_index = match self
-            .focused_path
+            .focused_id
             .as_ref()
-            .and_then(|path| targets.iter().position(|candidate| candidate == path))
+            .and_then(|id| targets.iter().position(|target| &target.id == id))
         {
             Some(index) if forward => (index + 1) % targets.len(),
             Some(0) => targets.len() - 1,
@@ -314,19 +413,19 @@ impl FocusManager {
             None => targets.len() - 1,
         };
 
-        self.set_focus(Some(targets[next_index].clone()));
+        self.set_focus(Some(targets[next_index].id.clone()));
     }
 
     fn move_within_scope(&mut self, scope_path: &WidgetPath, forward: bool) {
-        let targets: Vec<&WidgetPath> = self.analysis.descendant_targets(scope_path).collect();
+        let targets: Vec<&FocusTarget> = self.analysis.descendant_targets(scope_path).collect();
         if targets.is_empty() {
             return;
         }
 
         let next_index = match self
-            .focused_path
+            .focused_id
             .as_ref()
-            .and_then(|path| targets.iter().position(|candidate| *candidate == path))
+            .and_then(|id| targets.iter().position(|target| &target.id == id))
         {
             Some(index) if forward => (index + 1) % targets.len(),
             Some(0) => targets.len() - 1,
@@ -335,7 +434,7 @@ impl FocusManager {
             None => targets.len() - 1,
         };
 
-        self.set_focus(Some(targets[next_index].clone()));
+        self.set_focus(Some(targets[next_index].id.clone()));
     }
 
     fn resolve_scope_path(&self, requested: Option<&WidgetPath>) -> Option<WidgetPath> {
@@ -343,12 +442,12 @@ impl FocusManager {
             return self.analysis.scope(path).map(|_| path.clone());
         }
 
-        let focused = self.focused_path.as_ref()?;
+        let focused = self.current_path()?;
         self.ancestor_scope_paths(focused).pop()
     }
 
     fn active_trapping_scope(&self) -> Option<WidgetPath> {
-        let focused = self.focused_path.as_ref()?;
+        let focused = self.current_path()?;
         self.ancestor_scope_paths(focused)
             .into_iter()
             .rev()
@@ -370,19 +469,29 @@ impl FocusManager {
         scopes
     }
 
-    fn remember_focus(&mut self, focused: &WidgetPath) {
-        for ancestor in focused.ancestors_inclusive() {
-            if self.analysis.scope(&ancestor).is_some() {
-                self.scope_memory.insert(ancestor, focused.clone());
+    fn remember_focus(&mut self, focused_id: &WidgetId) {
+        let Some(focused_path) = self.analysis.path_for_id(focused_id) else {
+            return;
+        };
+
+        for ancestor in focused_path.ancestors_inclusive() {
+            if let Some(scope) = self.analysis.scope_node(&ancestor) {
+                self.scope_memory
+                    .insert(scope.id.clone(), focused_id.clone());
             }
         }
     }
 
     fn prune_scope_memory(&mut self) {
-        self.scope_memory.retain(|scope_path, focused_path| {
-            self.analysis.scope(scope_path).is_some()
-                && self.analysis.is_focus_target(focused_path)
-                && focused_path.starts_with(scope_path)
+        let analysis = &self.analysis;
+        self.scope_memory.retain(|scope_id, focused_id| {
+            let Some(scope) = analysis.scope_node_by_id(scope_id) else {
+                return false;
+            };
+            let Some(focused_path) = analysis.path_for_id(focused_id) else {
+                return false;
+            };
+            analysis.is_focus_target_id(focused_id) && focused_path.starts_with(&scope.path)
         });
     }
 }
@@ -473,6 +582,25 @@ mod tests {
     }
 
     #[test]
+    fn requesting_unfocusable_path_preserves_current_focus() {
+        let tree = TestWidget::node(None, FocusConfig::None).with_children(vec![
+            Box::new(TestWidget::node(Some("first"), FocusConfig::Leaf)),
+            Box::new(TestWidget::node(Some("disabled"), FocusConfig::None)),
+            Box::new(TestWidget::node(Some("second"), FocusConfig::Leaf)),
+        ]);
+
+        let mut focus = FocusManager::new();
+        focus.rebuild(&tree);
+        assert_eq!(focus.current_path().cloned(), Some(path(&["first"])));
+
+        assert!(focus.request_focus(&path(&["second"])));
+        assert_eq!(focus.current_path().cloned(), Some(path(&["second"])));
+
+        assert!(!focus.request_focus(&path(&["disabled"])));
+        assert_eq!(focus.current_path().cloned(), Some(path(&["second"])));
+    }
+
+    #[test]
     fn last_focused_entry_restores_previous_descendant() {
         let tree = TestWidget::node(None, FocusConfig::None).with_children(vec![
             Box::new(
@@ -534,5 +662,38 @@ mod tests {
         assert!(focus.request_focus(&path(&["outside"])));
         focus.next();
         assert_eq!(focus.current_path().cloned(), Some(path(&["scope", "a"])));
+    }
+
+    #[test]
+    fn keyed_focus_survives_inserted_unkeyed_wrapper_before_it() {
+        let first_tree = TestWidget::node(None, FocusConfig::None).with_children(vec![Box::new(
+            TestWidget::node(None, FocusConfig::None).with_children(vec![Box::new(
+                TestWidget::node(Some("target"), FocusConfig::Leaf),
+            )]),
+        )]);
+
+        let second_tree = TestWidget::node(None, FocusConfig::None).with_children(vec![
+            Box::new(TestWidget::node(None, FocusConfig::None)),
+            Box::new(
+                TestWidget::node(None, FocusConfig::None).with_children(vec![Box::new(
+                    TestWidget::node(Some("target"), FocusConfig::Leaf),
+                )]),
+            ),
+        ]);
+
+        let mut first_path = WidgetPath::root();
+        first_path.push(WidgetKey::Index(0));
+        first_path.push(WidgetKey::Named("target".into()));
+
+        let mut second_path = WidgetPath::root();
+        second_path.push(WidgetKey::Index(1));
+        second_path.push(WidgetKey::Named("target".into()));
+
+        let mut focus = FocusManager::new();
+        focus.rebuild(&first_tree);
+        assert_eq!(focus.current_path().cloned(), Some(first_path));
+
+        focus.rebuild(&second_tree);
+        assert_eq!(focus.current_path().cloned(), Some(second_path));
     }
 }
